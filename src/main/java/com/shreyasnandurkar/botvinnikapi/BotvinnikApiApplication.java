@@ -1,0 +1,13 @@
+package com.shreyasnandurkar.botvinnikapi;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class BotvinnikApiApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(BotvinnikApiApplication.class, args);
+    }
+
+}
