@@ -22,6 +22,8 @@ final class OllamaApi {
             String model,
             List<Msg> messages,
             boolean stream,
+            /* Always sent explicitly: thinking models default it to true and burn hidden tokens. */
+            boolean think,
             Map<String, Object> options,
             List<ToolDef> tools) {
     }
@@ -31,6 +33,8 @@ final class OllamaApi {
     record Msg(
             String role,
             String content,
+            /* Ollama separates the reasoning trace from content for thinking models. */
+            String thinking,
             @JsonProperty("tool_calls") List<ToolCallObj> toolCalls) {
     }
 

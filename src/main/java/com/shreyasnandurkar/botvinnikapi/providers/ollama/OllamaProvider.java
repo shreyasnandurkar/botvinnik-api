@@ -12,7 +12,10 @@ import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
 import com.shreyasnandurkar.botvinnikapi.core.model.TokenUsage;
 import com.shreyasnandurkar.botvinnikapi.core.model.Tool;
 import com.shreyasnandurkar.botvinnikapi.core.model.ToolCall;
+import com.shreyasnandurkar.botvinnikapi.core.model.ToolCallDelta;
 import io.netty.channel.ChannelOption;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -27,7 +30,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Adapter for Ollama's native API. Speaks /api/chat and /api/tags directly and
@@ -35,6 +37,8 @@ import java.util.UUID;
  * by a genuinely different wire format.
  */
 public class OllamaProvider implements LLMProvider {
+
+    private static final Logger log = LoggerFactory.getLogger(OllamaProvider.class);
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration RESPONSE_TIMEOUT = Duration.ofMinutes(5);
@@ -78,7 +82,70 @@ public class OllamaProvider implements LLMProvider {
 
     @Override
     public Flux<ChatChunk> stream(ChatRequest request) {
-        return Flux.error(new UnsupportedOperationException("Streaming is not implemented yet"));
+        OllamaApi.ChatRequest body = toOllamaRequest(request, true);
+        // defer: the per-stream state must be fresh for every subscription.
+        return Flux.defer(() -> {
+            StreamState state = new StreamState();
+            return client.post()
+                    .uri("/api/chat")
+                    .bodyValue(body)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::isError, resp -> resp.bodyToMono(String.class)
+                            .defaultIfEmpty("")
+                            .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
+                    // Ollama streams NDJSON; the default String decoder splits it into lines.
+                    .bodyToFlux(String.class)
+                    .concatMap(line -> Flux.fromIterable(normalizeLine(line, state)))
+                    .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
+        });
+    }
+
+    /** Per-stream mutable state: tool-call indexing and the finish-reason override. */
+    private static final class StreamState {
+        int toolCallIndex;
+        boolean hasToolCalls;
+    }
+
+    private List<ChatChunk> normalizeLine(String line, StreamState state) {
+        if (line.isBlank()) {
+            return List.of();
+        }
+        OllamaApi.ChatResponse chunk;
+        try {
+            chunk = mapper.readValue(line, OllamaApi.ChatResponse.class);
+        } catch (Exception e) {
+            // §8: fail soft — one malformed chunk must not kill an otherwise good stream.
+            log.warn("Provider '{}': skipping malformed stream chunk: {}", name, e.getMessage());
+            return List.of();
+        }
+        List<ChatChunk> out = new ArrayList<>();
+        if (chunk.message() != null) {
+            if (chunk.message().thinking() != null && !chunk.message().thinking().isEmpty()) {
+                out.add(ChatChunk.reasoning(chunk.message().thinking()));
+            }
+            if (chunk.message().content() != null && !chunk.message().content().isEmpty()) {
+                out.add(ChatChunk.content(chunk.message().content()));
+            }
+            if (chunk.message().toolCalls() != null) {
+                // Ollama emits each tool call whole, not fragmented — one delta carries everything.
+                for (OllamaApi.ToolCallObj tc : chunk.message().toolCalls()) {
+                    state.hasToolCalls = true;
+                    out.add(new ChatChunk(null, null, new ToolCallDelta(
+                            state.toolCallIndex++, ToolCall.generatedId(), tc.function().name(),
+                            tc.function().arguments() == null ? "{}" : tc.function().arguments().toString()),
+                            null, null));
+                }
+            }
+        }
+        if (chunk.done()) {
+            // Usage exists only here, in the final chunk (§6 ⑪).
+            out.add(new ChatChunk(null, null, null,
+                    normalizeFinishReason(chunk.doneReason(), state.hasToolCalls),
+                    new TokenUsage(
+                            chunk.promptEvalCount() == null ? 0 : chunk.promptEvalCount(),
+                            chunk.evalCount() == null ? 0 : chunk.evalCount())));
+        }
+        return out;
     }
 
     @Override
@@ -124,6 +191,9 @@ public class OllamaProvider implements LLMProvider {
 
         return new OllamaApi.ChatRequest(
                 request.model(), messages, stream,
+                // Explicit think:false unless the client opted in via reasoning_effort —
+                // otherwise qwen3-style models bill thousands of tokens nobody sees.
+                request.wantsReasoning(),
                 options.isEmpty() ? null : options, tools);
     }
 
@@ -136,13 +206,14 @@ public class OllamaProvider implements LLMProvider {
                             tc.name(), mapper.readTree(tc.argumentsJson() == null ? "{}" : tc.argumentsJson()))))
                     .toList();
         }
-        return new OllamaApi.Msg(m.role(), m.content(), toolCalls);
+        return new OllamaApi.Msg(m.role(), m.content(), null, toolCalls);
     }
 
     // ── response normalization ─────────────────────────────────────────────
 
     private ChatResponse normalize(OllamaApi.ChatResponse resp, long startNanos) {
         String content = resp.message() == null ? null : resp.message().content();
+        String reasoning = resp.message() == null ? null : emptyToNull(resp.message().thinking());
 
         List<ToolCall> toolCalls = null;
         if (resp.message() != null && resp.message().toolCalls() != null && !resp.message().toolCalls().isEmpty()) {
@@ -150,7 +221,7 @@ public class OllamaProvider implements LLMProvider {
             for (OllamaApi.ToolCallObj tc : resp.message().toolCalls()) {
                 // Ollama assigns no call id — generate one so OpenAI clients get the shape they expect.
                 toolCalls.add(new ToolCall(
-                        "call_" + UUID.randomUUID().toString().replace("-", "").substring(0, 24),
+                        ToolCall.generatedId(),
                         tc.function().name(),
                         tc.function().arguments() == null ? "{}" : tc.function().arguments().toString()));
             }
@@ -161,9 +232,13 @@ public class OllamaProvider implements LLMProvider {
                 resp.evalCount() == null ? 0 : resp.evalCount());
 
         return new ChatResponse(
-                content, toolCalls,
+                content, reasoning, toolCalls,
                 normalizeFinishReason(resp.doneReason(), toolCalls != null),
                 usage, name, resp.model(), millisSince(startNanos));
+    }
+
+    private static String emptyToNull(String value) {
+        return value == null || value.isEmpty() ? null : value;
     }
 
     /** Map Ollama's done_reason vocabulary onto OpenAI's. */

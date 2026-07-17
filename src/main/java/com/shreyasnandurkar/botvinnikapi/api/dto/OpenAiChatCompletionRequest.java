@@ -33,13 +33,20 @@ public class OpenAiChatCompletionRequest {
     /** String or array of strings — normalized in {@link #stopList()}. */
     public JsonNode stop;
     public Boolean stream;
-    /** Accepted now, meaningful in streaming (build step 3). */
+    /** Only {"include_usage": bool} is honored — anything else is rejected in validate(). */
     @JsonProperty("stream_options")
     public JsonNode streamOptions;
     public List<IncomingTool> tools;
     /** Only "auto" (the default) is supported until routing can honor it. */
     @JsonProperty("tool_choice")
     public JsonNode toolChoice;
+    /**
+     * OpenAI's reasoning_effort. Gateway default is OFF ("none") — thinking models
+     * otherwise bill thousands of hidden tokens per request. Any other value opts in,
+     * and the trace comes back as reasoning_content.
+     */
+    @JsonProperty("reasoning_effort")
+    public String reasoningEffort;
     /** Declared so we can reject n > 1 specifically instead of "unknown param". */
     public Integer n;
     /** OpenAI treats this as telemetry; accepting it costs nothing. */
@@ -72,6 +79,26 @@ public class OpenAiChatCompletionRequest {
         if (toolChoice != null && !(toolChoice.isTextual() && toolChoice.textValue().equals("auto"))) {
             throw new InvalidRequestException("Only tool_choice: \"auto\" is supported.", "tool_choice");
         }
+        if (reasoningEffort != null && !List.of("none", "minimal", "low", "medium", "high").contains(reasoningEffort)) {
+            throw new InvalidRequestException(
+                    "'reasoning_effort' must be one of none, minimal, low, medium, high.",
+                    "reasoning_effort");
+        }
+        if (streamOptions != null && !streamOptions.isNull()) {
+            if (!Boolean.TRUE.equals(stream)) {
+                throw new InvalidRequestException(
+                        "'stream_options' is only allowed with stream: true.", "stream_options");
+            }
+            if (!streamOptions.isObject()) {
+                throw new InvalidRequestException("'stream_options' must be an object.", "stream_options");
+            }
+            for (var property : streamOptions.properties()) {
+                if (!property.getKey().equals("include_usage")) {
+                    throw new InvalidRequestException(
+                            "Unknown stream_options field '" + property.getKey() + "'.", "stream_options");
+                }
+            }
+        }
         for (int i = 0; i < messages.size(); i++) {
             IncomingMessage m = messages.get(i);
             if (m.role == null || m.role.isBlank()) {
@@ -96,7 +123,16 @@ public class OpenAiChatCompletionRequest {
                 : tools.stream().map(IncomingTool::toTool).toList();
         Integer effectiveMaxTokens = maxTokens != null ? maxTokens : maxCompletionTokens;
         return new ChatRequest(resolvedModel, mapped, temperature, topP,
-                effectiveMaxTokens, stopList(), stream, mappedTools);
+                effectiveMaxTokens, stopList(), stream, reasoningEffort, mappedTools);
+    }
+
+    /** stream_options.include_usage — OpenAI's opt-in for a final usage-only chunk. */
+    public boolean includeStreamUsage() {
+        if (streamOptions == null) {
+            return false;
+        }
+        JsonNode flag = streamOptions.path("include_usage");
+        return flag.isBoolean() && flag.booleanValue();
     }
 
     private List<String> stopList() {

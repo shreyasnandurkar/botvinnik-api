@@ -11,7 +11,7 @@ import reactor.util.function.Tuples;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** GET /v1/health — per-provider liveness (§15). */
+/** GET /v1/health — per-provider liveness. */
 @RestController
 public class HealthController {
 

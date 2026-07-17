@@ -10,3 +10,6 @@ botvinnik:
     - name: local-ollama
       type: ollama
       base-url: http://localhost:11434
+    - name: google
+      type: gemini
+      api-key: ${GEMINI_API_KEY}

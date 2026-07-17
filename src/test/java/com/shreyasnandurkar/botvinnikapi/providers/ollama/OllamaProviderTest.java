@@ -4,6 +4,7 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.shreyasnandurkar.botvinnikapi.core.error.ProviderUnreachableException;
 import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
+import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
@@ -55,7 +56,13 @@ class OllamaProviderTest {
     private static ChatRequest simpleRequest() {
         return new ChatRequest("qwen3:1.7b",
                 List.of(Message.text("user", "Explain TCP backpressure")),
-                0.7, null, 128, null, false, null);
+                0.7, null, 128, null, false, null, null);
+    }
+
+    private static ChatRequest streamingRequest() {
+        return new ChatRequest("qwen3:1.7b",
+                List.of(Message.text("user", "Explain TCP backpressure")),
+                0.7, null, 128, null, true, null, null);
     }
 
     @Test
@@ -94,8 +101,32 @@ class OllamaProviderTest {
         wiremock.verify(postRequestedFor(urlEqualTo("/api/chat"))
                 .withRequestBody(matchingJsonPath("$.model", equalTo("qwen3:1.7b")))
                 .withRequestBody(matchingJsonPath("$.stream", equalTo("false")))
+                // Reasoning is off unless the client opts in — hidden tokens cost real money.
+                .withRequestBody(matchingJsonPath("$.think", equalTo("false")))
                 .withRequestBody(matchingJsonPath("$.options.temperature", equalTo("0.7")))
                 .withRequestBody(matchingJsonPath("$.options.num_predict", equalTo("128"))));
+    }
+
+    @Test
+    void reasoningEffortEnablesThinkAndThinkingComesBackAsReasoningContent() {
+        wiremock.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                        {"model":"qwen3:1.7b",
+                         "message":{"role":"assistant","content":"42",
+                                    "thinking":"The user wants a short answer..."},
+                         "done":true,"done_reason":"stop"}
+                        """)));
+
+        ChatRequest request = new ChatRequest("qwen3:1.7b",
+                List.of(Message.text("user", "meaning of life?")),
+                null, null, null, null, false, "high", null);
+        ChatResponse resp = provider.chat(request).block();
+
+        wiremock.verify(postRequestedFor(urlEqualTo("/api/chat"))
+                .withRequestBody(matchingJsonPath("$.think", equalTo("true"))));
+        assertThat(resp.content()).isEqualTo("42");
+        assertThat(resp.reasoningContent()).isEqualTo("The user wants a short answer...");
     }
 
     @Test
@@ -119,6 +150,101 @@ class OllamaProviderTest {
         // OpenAI convention: arguments must be a JSON *string* that parses on its own.
         assertThat(resp.toolCalls().getFirst().argumentsJson())
                 .isEqualTo("{\"location\":\"Bangalore\"}");
+    }
+
+    @Test
+    void normalizesNdjsonStreamToChunks() {
+        wiremock.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/x-ndjson")
+                .withBody("""
+                        {"model":"qwen3:1.7b","message":{"role":"assistant","content":"TCP"},"done":false}
+                        {"model":"qwen3:1.7b","message":{"role":"assistant","content":" is"},"done":false}
+                        {"model":"qwen3:1.7b","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":9,"eval_count":142}
+                        """)));
+
+        List<ChatChunk> chunks = provider.stream(streamingRequest()).collectList().block();
+
+        assertThat(chunks).hasSize(3);
+        assertThat(chunks.get(0).contentDelta()).isEqualTo("TCP");
+        assertThat(chunks.get(1).contentDelta()).isEqualTo(" is");
+        // Usage lives only in the final NDJSON object (§6 ⑪).
+        assertThat(chunks.get(2).finishReason()).isEqualTo("stop");
+        assertThat(chunks.get(2).usage().promptTokens()).isEqualTo(9);
+        assertThat(chunks.get(2).usage().completionTokens()).isEqualTo(142);
+
+        wiremock.verify(postRequestedFor(urlEqualTo("/api/chat"))
+                .withRequestBody(matchingJsonPath("$.stream", equalTo("true"))));
+    }
+
+    @Test
+    void streamedWholeToolCallBecomesOneDeltaAndToolCallsFinish() {
+        wiremock.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/x-ndjson")
+                .withBody("""
+                        {"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_weather","arguments":{"location":"Bangalore"}}}]},"done":false}
+                        {"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":4,"eval_count":8}
+                        """)));
+
+        List<ChatChunk> chunks = provider.stream(streamingRequest()).collectList().block();
+
+        assertThat(chunks).hasSize(2);
+        // Ollama emits the call whole — one delta carries id, name and full arguments.
+        assertThat(chunks.get(0).toolCallDelta().index()).isEqualTo(0);
+        assertThat(chunks.get(0).toolCallDelta().id()).startsWith("call_");
+        assertThat(chunks.get(0).toolCallDelta().name()).isEqualTo("get_weather");
+        assertThat(chunks.get(0).toolCallDelta().argumentsFragment())
+                .isEqualTo("{\"location\":\"Bangalore\"}");
+        assertThat(chunks.get(1).finishReason()).isEqualTo("tool_calls");
+    }
+
+    @Test
+    void streamedThinkingBecomesReasoningDeltas() {
+        wiremock.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/x-ndjson")
+                .withBody("""
+                        {"message":{"role":"assistant","content":"","thinking":"Let me think"},"done":false}
+                        {"message":{"role":"assistant","content":"42"},"done":false}
+                        {"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":3,"eval_count":9}
+                        """)));
+
+        ChatRequest request = new ChatRequest("qwen3:1.7b",
+                List.of(Message.text("user", "meaning of life?")),
+                null, null, null, null, true, "low", null);
+        List<ChatChunk> chunks = provider.stream(request).collectList().block();
+
+        assertThat(chunks).hasSize(3);
+        assertThat(chunks.get(0).reasoningDelta()).isEqualTo("Let me think");
+        assertThat(chunks.get(0).contentDelta()).isNull();
+        assertThat(chunks.get(1).contentDelta()).isEqualTo("42");
+        assertThat(chunks.get(2).finishReason()).isEqualTo("stop");
+    }
+
+    @Test
+    void malformedLineIsSkippedAndTheStreamSurvives() {
+        wiremock.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/x-ndjson")
+                .withBody("""
+                        {"message":{"role":"assistant","content":"TCP"},"done":false}
+                        this is not json at all
+                        {"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}
+                        """)));
+
+        List<ChatChunk> chunks = provider.stream(streamingRequest()).collectList().block();
+
+        // §8: fail soft — the garbage line is dropped, the rest of the stream lives.
+        assertThat(chunks).hasSize(2);
+        assertThat(chunks.get(0).contentDelta()).isEqualTo("TCP");
+        assertThat(chunks.get(1).finishReason()).isEqualTo("stop");
+    }
+
+    @Test
+    void streamUpstreamErrorStatusBecomesUpstreamException() {
+        wiremock.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withStatus(500).withBody("model runner crashed")));
+
+        assertThatThrownBy(() -> provider.stream(streamingRequest()).collectList().block())
+                .isInstanceOf(UpstreamException.class)
+                .hasMessageContaining("500");
     }
 
     @Test

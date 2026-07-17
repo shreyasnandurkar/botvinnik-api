@@ -2,6 +2,7 @@ package com.shreyasnandurkar.botvinnikapi.config;
 
 import com.shreyasnandurkar.botvinnikapi.core.LLMProvider;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
+import com.shreyasnandurkar.botvinnikapi.providers.gemini.GeminiProvider;
 import com.shreyasnandurkar.botvinnikapi.providers.ollama.OllamaProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -25,6 +26,13 @@ public class ProviderConfiguration {
         for (GatewayProperties.ProviderProps p : properties.providers()) {
             LLMProvider provider = switch (p.type()) {
                 case "ollama" -> new OllamaProvider(p.name(), p.baseUrl(), webClientBuilder, objectMapper);
+                case "gemini" -> {
+                    if (p.apiKey() == null || p.apiKey().isBlank()) {
+                        throw new IllegalStateException(
+                                "Provider '" + p.name() + "' (gemini) requires an api-key");
+                    }
+                    yield new GeminiProvider(p.name(), p.baseUrl(), p.apiKey(), webClientBuilder, objectMapper);
+                }
                 default -> throw new IllegalStateException(
                         "Unknown provider type '" + p.type() + "' for provider '" + p.name() + "'");
             };

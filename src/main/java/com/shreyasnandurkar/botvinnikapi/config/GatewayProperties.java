@@ -13,9 +13,10 @@ public record GatewayProperties(List<ProviderProps> providers) {
 
     /**
      * @param name    operator-chosen instance name, e.g. "office-gpu"
-     * @param type    adapter type, e.g. "ollama"
-     * @param baseUrl provider endpoint, e.g. "http://localhost:11434"
+     * @param type    adapter type, e.g. "ollama" | "gemini"
+     * @param baseUrl provider endpoint; optional for cloud providers with a well-known default
+     * @param apiKey  credential for cloud providers; unused for local ones
      */
-    public record ProviderProps(String name, String type, String baseUrl) {
+    public record ProviderProps(String name, String type, String baseUrl, String apiKey) {
     }
 }

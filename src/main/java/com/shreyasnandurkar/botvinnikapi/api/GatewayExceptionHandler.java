@@ -11,9 +11,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ServerWebInputException;
 
 /**
- * Every client-visible failure becomes an OpenAI-style {"error": {...}} body (§10:
- * structured errors, never a stack trace). Existing OpenAI SDKs already know how
- * to surface this shape.
+ * Every client-visible failure becomes an OpenAI-style {"error": {...}}
  */
 @RestControllerAdvice
 public class GatewayExceptionHandler {

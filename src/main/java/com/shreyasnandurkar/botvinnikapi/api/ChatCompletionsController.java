@@ -3,36 +3,47 @@ package com.shreyasnandurkar.botvinnikapi.api;
 import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiChatCompletionRequest;
 import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
-import com.shreyasnandurkar.botvinnikapi.core.error.InvalidRequestException;
+import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * The data-plane entry point (§5). Validate → resolve → dispatch → adapt back.
- * No database anywhere on this path.
+Validate → resolve → dispatch → adapt back.
  */
 @RestController
 public class ChatCompletionsController {
 
     private final ProviderRegistry registry;
+    private final OpenAiSseEncoder sseEncoder;
 
-    public ChatCompletionsController(ProviderRegistry registry) {
+    public ChatCompletionsController(ProviderRegistry registry, OpenAiSseEncoder sseEncoder) {
         this.registry = registry;
+        this.sseEncoder = sseEncoder;
     }
 
     @PostMapping("/v1/chat/completions")
-    public Mono<OpenAiDtos.ChatCompletionResponse> complete(@RequestBody OpenAiChatCompletionRequest body) {
+    public Mono<ResponseEntity<?>> complete(@RequestBody OpenAiChatCompletionRequest body) {
         body.validate();
-        if (Boolean.TRUE.equals(body.stream)) {
-            // Build order §19: streaming is step 3. Reject explicitly rather than
-            // pretending by buffering — a batching gateway that claims to stream is worse.
-            throw new InvalidRequestException("Streaming (stream: true) is not supported yet.", "stream");
-        }
         ProviderRegistry.Resolution resolution = registry.resolve(body.model);
+        ChatRequest request = body.toChatRequest(resolution.model());
+
+        if (Boolean.TRUE.equals(body.stream)) {
+            Flux<String> frames = sseEncoder.encode(
+                    resolution.provider().stream(request), resolution.model(), body.includeStreamUsage());
+            return Mono.just(ResponseEntity.ok()
+                    .contentType(MediaType.TEXT_EVENT_STREAM)
+                    .body(frames));
+        }
+
         return resolution.provider()
-                .chat(body.toChatRequest(resolution.model()))
-                .map(OpenAiDtos.ChatCompletionResponse::from);
+                .chat(request)
+                .map(resp -> ResponseEntity.ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(OpenAiDtos.ChatCompletionResponse.from(resp)));
     }
 }

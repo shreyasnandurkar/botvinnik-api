@@ -30,7 +30,8 @@ public final class OpenAiDtos {
                     .map(tc -> new OutgoingToolCall(tc.id(), "function",
                             new OutgoingFunctionCall(tc.name(), tc.argumentsJson())))
                     .toList();
-            OutgoingMessage message = new OutgoingMessage("assistant", resp.content(), toolCalls);
+            OutgoingMessage message = new OutgoingMessage(
+                    "assistant", resp.content(), resp.reasoningContent(), toolCalls);
             return new ChatCompletionResponse(
                     "chatcmpl-" + UUID.randomUUID().toString().replace("-", ""),
                     "chat.completion",
@@ -51,10 +52,12 @@ public final class OpenAiDtos {
             @JsonProperty("finish_reason") String finishReason) {
     }
 
+    /** reasoning_content follows the DeepSeek/vLLM convention OpenAI clients already parse. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record OutgoingMessage(
             String role,
             String content,
+            @JsonProperty("reasoning_content") String reasoningContent,
             @JsonProperty("tool_calls") List<OutgoingToolCall> toolCalls) {
     }
 
@@ -68,6 +71,39 @@ public final class OpenAiDtos {
             @JsonProperty("prompt_tokens") int promptTokens,
             @JsonProperty("completion_tokens") int completionTokens,
             @JsonProperty("total_tokens") int totalTokens) {
+    }
+
+    // ── streaming wire shapes ───────────────────────────────────────────────
+
+    /** One SSE frame's payload. The usage-only frame (stream_options) has choices: [] and usage set. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ChatCompletionChunk(
+            String id,
+            String object,
+            long created,
+            String model,
+            List<ChunkChoice> choices,
+            Usage usage) {
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ChunkChoice(
+            int index,
+            Delta delta,
+            @JsonProperty("finish_reason") String finishReason) {
+    }
+
+    /** The final frame's delta serializes as the empty object {}, per OpenAI. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Delta(
+            String role,
+            String content,
+            @JsonProperty("reasoning_content") String reasoningContent,
+            @JsonProperty("tool_calls") List<DeltaToolCall> toolCalls) {
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record DeltaToolCall(int index, String id, String type, OutgoingFunctionCall function) {
     }
 
     public record ModelList(String object, List<ModelEntry> data) {

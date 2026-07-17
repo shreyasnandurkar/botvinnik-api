@@ -8,9 +8,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * GET /v1/models — the union of listModels() across every registered provider (§3).
- * One unreachable provider must not blank the whole catalog, so per-provider
- * failures degrade to an empty contribution.
+ * GET /v1/models — the union of listModels() across every registered provider.
  */
 @RestController
 public class ModelsController {
