@@ -2,6 +2,7 @@ package com.shreyasnandurkar.botvinnikapi.api;
 
 import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiChatCompletionRequest;
 import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
+import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import org.springframework.http.MediaType;
@@ -18,18 +19,19 @@ Validate → resolve → dispatch → adapt back.
 @RestController
 public class ChatCompletionsController {
 
-    private final ProviderRegistry registry;
+    private final ConfigSnapshotService snapshots;
     private final OpenAiSseEncoder sseEncoder;
 
-    public ChatCompletionsController(ProviderRegistry registry, OpenAiSseEncoder sseEncoder) {
-        this.registry = registry;
+    public ChatCompletionsController(ConfigSnapshotService snapshots, OpenAiSseEncoder sseEncoder) {
+        this.snapshots = snapshots;
         this.sseEncoder = sseEncoder;
     }
 
     @PostMapping("/v1/chat/completions")
     public Mono<ResponseEntity<?>> complete(@RequestBody OpenAiChatCompletionRequest body) {
         body.validate();
-        ProviderRegistry.Resolution resolution = registry.resolve(body.model);
+        // Snapshot read only — the hot path never touches the DB (§4).
+        ProviderRegistry.Resolution resolution = snapshots.registry().resolve(body.model);
         ChatRequest request = body.toChatRequest(resolution.model());
 
         if (Boolean.TRUE.equals(body.stream)) {

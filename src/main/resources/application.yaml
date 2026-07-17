@@ -4,6 +4,14 @@ server:
 spring:
   application:
     name: botvinnikAPI
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:botvinnik}
+    username: ${DB_USER:botvinnik}
+    password: ${DB_PASSWORD:botvinnik}
+  flyway:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:botvinnik}
+    user: ${DB_USER:botvinnik}
+    password: ${DB_PASSWORD:botvinnik}
 
 botvinnik:
   providers:

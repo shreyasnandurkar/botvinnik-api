@@ -1,7 +1,7 @@
 package com.shreyasnandurkar.botvinnikapi.api;
 
 import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
-import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
+import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
@@ -13,15 +13,15 @@ import reactor.core.publisher.Mono;
 @RestController
 public class ModelsController {
 
-    private final ProviderRegistry registry;
+    private final ConfigSnapshotService snapshots;
 
-    public ModelsController(ProviderRegistry registry) {
-        this.registry = registry;
+    public ModelsController(ConfigSnapshotService snapshots) {
+        this.snapshots = snapshots;
     }
 
     @GetMapping("/v1/models")
     public Mono<OpenAiDtos.ModelList> listModels() {
-        return Flux.fromIterable(registry.all())
+        return Flux.fromIterable(snapshots.registry().all())
                 .flatMap(provider -> provider.listModels()
                         .onErrorReturn(java.util.List.of()))
                 .flatMapIterable(models -> models)
