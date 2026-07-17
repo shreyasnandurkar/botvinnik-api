@@ -5,6 +5,7 @@ import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.shreyasnandurkar.botvinnikapi.TestcontainersConfiguration;
 import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import com.shreyasnandurkar.botvinnikapi.control.db.AliasRepository;
+import com.shreyasnandurkar.botvinnikapi.control.db.PoolRepository;
 import com.shreyasnandurkar.botvinnikapi.control.db.ProviderRepository;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -40,6 +41,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 class ControlPlaneApiTest {
 
     static WireMockServer wiremock;
+    static WireMockServer wiremock2;
 
     @Autowired
     WebTestClient client;
@@ -48,17 +50,22 @@ class ControlPlaneApiTest {
     @Autowired
     AliasRepository aliasRepository;
     @Autowired
+    PoolRepository poolRepository;
+    @Autowired
     ConfigSnapshotService snapshots;
 
     @BeforeAll
     static void startServer() {
         wiremock = new WireMockServer(WireMockConfiguration.wireMockConfig().dynamicPort());
+        wiremock2 = new WireMockServer(WireMockConfiguration.wireMockConfig().dynamicPort());
         wiremock.start();
+        wiremock2.start();
     }
 
     @AfterAll
     static void stopServer() {
         wiremock.stop();
+        wiremock2.stop();
     }
 
     @DynamicPropertySource
@@ -76,8 +83,10 @@ class ControlPlaneApiTest {
     void cleanSlate() {
         aliasRepository.deleteAll().block();
         providerRepository.deleteAll().block();
+        poolRepository.deleteAll().block();
         snapshots.rebuild().block();
         wiremock.resetAll();
+        wiremock2.resetAll();
     }
 
     // ── providers ───────────────────────────────────────────────────────────
@@ -245,7 +254,78 @@ class ControlPlaneApiTest {
                 .expectStatus().isBadRequest();
     }
 
+    // ── pools ───────────────────────────────────────────────────────────────
+
+    @Test
+    void poolWithRoundRobinStrategyAlternatesAcrossMembers() {
+        client.post().uri("/v1/pools")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"local-gpus","strategy":"round_robin"}
+                        """)
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody().jsonPath("$.strategy").isEqualTo("round_robin");
+
+        registerInPool("gpu-a", wiremock.baseUrl(), "local-gpus");
+        registerInPool("gpu-b", wiremock2.baseUrl(), "local-gpus");
+        stubOllamaChatOn(wiremock, "from gpu-a");
+        stubOllamaChatOn(wiremock2, "from gpu-b");
+
+        client.post().uri("/v1/aliases")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"alias":"balanced","primary":"gpu-a/qwen3:1.7b"}
+                        """)
+                .exchange()
+                .expectStatus().isCreated();
+
+        for (int i = 0; i < 4; i++) {
+            chat("balanced").expectStatus().isOk();
+        }
+        wiremock.verify(2, postRequestedFor(urlEqualTo("/api/chat")));
+        wiremock2.verify(2, postRequestedFor(urlEqualTo("/api/chat")));
+
+        client.get().uri("/v1/pools")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$[0].name").isEqualTo("local-gpus")
+                .jsonPath("$[0].members.length()").isEqualTo(2);
+    }
+
+    @Test
+    void unknownPoolIsRejectedAtRegistration() {
+        client.post().uri("/v1/providers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"orphan","type":"ollama","base_url":"http://x","pool":"nope"}
+                        """)
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.error.param").isEqualTo("pool");
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
+
+    private void registerInPool(String name, String baseUrl, String pool) {
+        client.post().uri("/v1/providers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("""
+                        {"name":"%s","type":"ollama","base_url":"%s","pool":"%s"}
+                        """.formatted(name, baseUrl, pool))
+                .exchange()
+                .expectStatus().isCreated();
+    }
+
+    private void stubOllamaChatOn(WireMockServer server, String content) {
+        server.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                        {"model":"m","message":{"role":"assistant","content":"%s"},
+                         "done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}
+                        """.formatted(content))));
+    }
 
     private String register(String name) {
         byte[] body = client.post().uri("/v1/providers")

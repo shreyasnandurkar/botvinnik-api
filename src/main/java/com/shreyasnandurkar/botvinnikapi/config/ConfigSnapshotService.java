@@ -2,6 +2,8 @@ package com.shreyasnandurkar.botvinnikapi.config;
 
 import com.shreyasnandurkar.botvinnikapi.control.db.AliasEntity;
 import com.shreyasnandurkar.botvinnikapi.control.db.AliasRepository;
+import com.shreyasnandurkar.botvinnikapi.control.db.PoolEntity;
+import com.shreyasnandurkar.botvinnikapi.control.db.PoolRepository;
 import com.shreyasnandurkar.botvinnikapi.control.db.ProviderEntity;
 import com.shreyasnandurkar.botvinnikapi.control.db.ProviderRepository;
 import com.shreyasnandurkar.botvinnikapi.core.LLMProvider;
@@ -34,14 +36,16 @@ public class ConfigSnapshotService {
 
     private final ProviderRepository providerRepository;
     private final AliasRepository aliasRepository;
+    private final PoolRepository poolRepository;
     private final ProviderFactory factory;
     private final ObjectMapper mapper;
     private final AtomicReference<ProviderRegistry> snapshot = new AtomicReference<>(ProviderRegistry.empty());
 
     public ConfigSnapshotService(ProviderRepository providerRepository, AliasRepository aliasRepository,
-                                 ProviderFactory factory, ObjectMapper mapper) {
+                                 PoolRepository poolRepository, ProviderFactory factory, ObjectMapper mapper) {
         this.providerRepository = providerRepository;
         this.aliasRepository = aliasRepository;
+        this.poolRepository = poolRepository;
         this.factory = factory;
         this.mapper = mapper;
     }
@@ -51,14 +55,17 @@ public class ConfigSnapshotService {
     }
 
     public Mono<Void> rebuild() {
-        return providerRepository.findAllByOrderByCreatedAt().collectList()
-                .zipWith(aliasRepository.findAll().collectList())
-                .map(t -> build(t.getT1(), t.getT2()))
+        return Mono.zip(
+                        providerRepository.findAllByOrderByCreatedAt().collectList(),
+                        aliasRepository.findAll().collectList(),
+                        poolRepository.findAll().collectList())
+                .map(t -> build(t.getT1(), t.getT2(), t.getT3()))
                 .doOnNext(snapshot::set)
                 .then();
     }
 
-    private ProviderRegistry build(List<ProviderEntity> providerRows, List<AliasEntity> aliasRows) {
+    private ProviderRegistry build(List<ProviderEntity> providerRows, List<AliasEntity> aliasRows,
+                                   List<PoolEntity> poolRows) {
         SequencedMap<String, LLMProvider> providers = new LinkedHashMap<>();
         Map<UUID, String> namesById = new HashMap<>();
         for (ProviderEntity row : providerRows) {
@@ -84,8 +91,19 @@ public class ConfigSnapshotService {
             aliases.put(row.alias(), new ProviderRegistry.AliasRoute(
                     providerName, row.targetModel(), readFallbacks(row)));
         }
-        log.info("Config snapshot rebuilt: {} active providers, {} aliases", providers.size(), aliases.size());
-        return new ProviderRegistry(providers, aliases);
+        Map<String, ProviderRegistry.PoolDef> poolsByName = new HashMap<>();
+        Map<String, String> poolByProvider = new HashMap<>();
+        for (PoolEntity pool : poolRows) {
+            List<String> members = providerRows.stream()
+                    .filter(p -> pool.id().equals(p.poolId()) && providers.containsKey(p.name()))
+                    .map(ProviderEntity::name)
+                    .toList();
+            poolsByName.put(pool.name(), new ProviderRegistry.PoolDef(pool.name(), pool.strategy(), members));
+            members.forEach(member -> poolByProvider.put(member, pool.name()));
+        }
+        log.info("Config snapshot rebuilt: {} active providers, {} aliases, {} pools",
+                providers.size(), aliases.size(), poolsByName.size());
+        return new ProviderRegistry(providers, aliases, poolsByName, poolByProvider);
     }
 
     private List<String> readFallbacks(AliasEntity row) {

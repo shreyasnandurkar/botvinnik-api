@@ -4,7 +4,7 @@ import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiChatCompletionRequest;
 import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
 import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
-import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
+import com.shreyasnandurkar.botvinnikapi.core.routing.RequestRouter;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,10 +20,13 @@ Validate → resolve → dispatch → adapt back.
 public class ChatCompletionsController {
 
     private final ConfigSnapshotService snapshots;
+    private final RequestRouter router;
     private final OpenAiSseEncoder sseEncoder;
 
-    public ChatCompletionsController(ConfigSnapshotService snapshots, OpenAiSseEncoder sseEncoder) {
+    public ChatCompletionsController(ConfigSnapshotService snapshots, RequestRouter router,
+                                     OpenAiSseEncoder sseEncoder) {
         this.snapshots = snapshots;
+        this.router = router;
         this.sseEncoder = sseEncoder;
     }
 
@@ -31,19 +34,18 @@ public class ChatCompletionsController {
     public Mono<ResponseEntity<?>> complete(@RequestBody OpenAiChatCompletionRequest body) {
         body.validate();
         // Snapshot read only — the hot path never touches the DB (§4).
-        ProviderRegistry.Resolution resolution = snapshots.registry().resolve(body.model);
-        ChatRequest request = body.toChatRequest(resolution.model());
+        ProviderRegistry.RoutePlan plan = snapshots.registry().resolveRoute(body.model);
 
         if (Boolean.TRUE.equals(body.stream)) {
             Flux<String> frames = sseEncoder.encode(
-                    resolution.provider().stream(request), resolution.model(), body.includeStreamUsage());
+                    router.stream(plan, body::toChatRequest),
+                    plan.primary().model(), body.includeStreamUsage());
             return Mono.just(ResponseEntity.ok()
                     .contentType(MediaType.TEXT_EVENT_STREAM)
                     .body(frames));
         }
 
-        return resolution.provider()
-                .chat(request)
+        return router.chat(plan, body::toChatRequest)
                 .map(resp -> ResponseEntity.ok()
                         .contentType(MediaType.APPLICATION_JSON)
                         .body(OpenAiDtos.ChatCompletionResponse.from(resp)));

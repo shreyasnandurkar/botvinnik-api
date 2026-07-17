@@ -2,6 +2,7 @@ package com.shreyasnandurkar.botvinnikapi.control;
 
 import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import com.shreyasnandurkar.botvinnikapi.control.db.AliasRepository;
+import com.shreyasnandurkar.botvinnikapi.control.db.PoolRepository;
 import com.shreyasnandurkar.botvinnikapi.control.db.ProviderEntity;
 import com.shreyasnandurkar.botvinnikapi.control.db.ProviderRepository;
 import com.shreyasnandurkar.botvinnikapi.control.dto.ControlDtos;
@@ -26,12 +27,14 @@ public class ProvidersController {
 
     private final ProviderRepository providers;
     private final AliasRepository aliases;
+    private final PoolRepository pools;
     private final ConfigSnapshotService snapshots;
 
     public ProvidersController(ProviderRepository providers, AliasRepository aliases,
-                               ConfigSnapshotService snapshots) {
+                               PoolRepository pools, ConfigSnapshotService snapshots) {
         this.providers = providers;
         this.aliases = aliases;
+        this.pools = pools;
         this.snapshots = snapshots;
     }
 
@@ -42,9 +45,10 @@ public class ProvidersController {
         return providers.findByName(body.name())
                 .flatMap(existing -> Mono.<ProviderEntity>error(new InvalidRequestException(
                         "A provider named '" + body.name() + "' already exists.", "name")))
-                .switchIfEmpty(providers.save(new ProviderEntity(
-                        null, body.name(), body.type(), body.baseUrl(), body.apiKey(),
-                        body.streamIdleTimeoutMs(), null, "active", null)))
+                .switchIfEmpty(Mono.defer(() -> resolvePoolId(body.pool())
+                        .flatMap(poolId -> providers.save(new ProviderEntity(
+                                null, body.name(), body.type(), body.baseUrl(), body.apiKey(),
+                                body.streamIdleTimeoutMs(), unwrap(poolId), "active", null)))))
                 .flatMap(saved -> snapshots.rebuild().thenReturn(saved))
                 .map(ControlDtos.ProviderResponse::from);
     }
@@ -62,15 +66,16 @@ public class ProvidersController {
         body.validate();
         return providers.findById(id)
                 .switchIfEmpty(Mono.error(new NotFoundException("Provider", id.toString())))
-                .map(existing -> new ProviderEntity(
-                        existing.id(), existing.name(), existing.type(),
-                        body.baseUrl() != null ? body.baseUrl() : existing.baseUrl(),
-                        body.apiKey() != null ? body.apiKey() : existing.apiKey(),
-                        body.streamIdleTimeoutMs() != null ? body.streamIdleTimeoutMs()
-                                : existing.streamIdleTimeoutMs(),
-                        existing.poolId(),
-                        body.status() != null ? body.status() : existing.status(),
-                        existing.createdAt()))
+                .flatMap(existing -> resolvePoolId(body.pool())
+                        .map(poolId -> new ProviderEntity(
+                                existing.id(), existing.name(), existing.type(),
+                                body.baseUrl() != null ? body.baseUrl() : existing.baseUrl(),
+                                body.apiKey() != null ? body.apiKey() : existing.apiKey(),
+                                body.streamIdleTimeoutMs() != null ? body.streamIdleTimeoutMs()
+                                        : existing.streamIdleTimeoutMs(),
+                                body.pool() == null ? existing.poolId() : unwrap(poolId),
+                                body.status() != null ? body.status() : existing.status(),
+                                existing.createdAt())))
                 .flatMap(providers::save)
                 .flatMap(saved -> snapshots.rebuild().thenReturn(saved))
                 .map(ControlDtos.ProviderResponse::from);
@@ -91,5 +96,25 @@ public class ProvidersController {
                             return providers.deleteById(id);
                         }))
                 .then(snapshots.rebuild());
+    }
+
+    // ── helpers ─────────────────────────────────────────────────────────────
+
+    /** Marks "no pool" so reactive operators never have to carry a null. */
+    private static final UUID NO_POOL = new UUID(0, 0);
+
+    private static UUID unwrap(UUID poolId) {
+        return NO_POOL.equals(poolId) ? null : poolId;
+    }
+
+    /** null or "" → NO_POOL; a name must resolve or the request is rejected. */
+    private Mono<UUID> resolvePoolId(String pool) {
+        if (pool == null || pool.isBlank()) {
+            return Mono.just(NO_POOL);
+        }
+        return pools.findByName(pool)
+                .map(p -> p.id())
+                .switchIfEmpty(Mono.error(new InvalidRequestException(
+                        "'pool' references unknown pool '" + pool + "'.", "pool")));
     }
 }

@@ -23,7 +23,8 @@ public final class ControlDtos {
             String type,
             @JsonProperty("base_url") String baseUrl,
             @JsonProperty("api_key") String apiKey,
-            @JsonProperty("stream_idle_timeout_ms") Long streamIdleTimeoutMs) {
+            @JsonProperty("stream_idle_timeout_ms") Long streamIdleTimeoutMs,
+            String pool) {
 
         public void validate() {
             if (name == null || !NAME.matcher(name).matches()) {
@@ -47,11 +48,13 @@ public final class ControlDtos {
         }
     }
 
+    /** pool: null leaves membership untouched; "" clears it. */
     public record UpdateProviderRequest(
             @JsonProperty("base_url") String baseUrl,
             @JsonProperty("api_key") String apiKey,
             String status,
-            @JsonProperty("stream_idle_timeout_ms") Long streamIdleTimeoutMs) {
+            @JsonProperty("stream_idle_timeout_ms") Long streamIdleTimeoutMs,
+            String pool) {
 
         public void validate() {
             if (status != null && !status.equals("active") && !status.equals("disabled")) {
@@ -71,11 +74,40 @@ public final class ControlDtos {
             String type,
             @JsonProperty("base_url") String baseUrl,
             String status,
+            @JsonProperty("pool_id") UUID poolId,
             @JsonProperty("created_at") Instant createdAt) {
 
         public static ProviderResponse from(ProviderEntity e) {
-            return new ProviderResponse(e.id(), e.name(), e.type(), e.baseUrl(), e.status(), e.createdAt());
+            return new ProviderResponse(e.id(), e.name(), e.type(), e.baseUrl(), e.status(),
+                    e.poolId(), e.createdAt());
         }
+    }
+
+    public record CreatePoolRequest(String name, String strategy) {
+
+        private static final List<String> STRATEGIES = List.of("p2c", "least_conn", "round_robin");
+
+        public void validate() {
+            if (name == null || !NAME.matcher(name).matches()) {
+                throw new InvalidRequestException(
+                        "'name' is required and may only contain letters, digits, '.', '_' and '-'.", "name");
+            }
+            if (strategy != null && !STRATEGIES.contains(strategy)) {
+                throw new InvalidRequestException(
+                        "'strategy' must be one of " + String.join(", ", STRATEGIES) + ".", "strategy");
+            }
+        }
+
+        public String strategyOrDefault() {
+            return strategy == null ? "p2c" : strategy;
+        }
+    }
+
+    public record PoolResponse(
+            UUID id,
+            String name,
+            String strategy,
+            List<String> members) {
     }
 
     public record CreateAliasRequest(
