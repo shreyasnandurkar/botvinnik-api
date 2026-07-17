@@ -2,6 +2,7 @@ package com.shreyasnandurkar.botvinnikapi.providers.ollama;
 
 import com.shreyasnandurkar.botvinnikapi.core.LLMProvider;
 import com.shreyasnandurkar.botvinnikapi.core.error.ProviderUnreachableException;
+import com.shreyasnandurkar.botvinnikapi.core.error.StreamIdleTimeoutException;
 import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
@@ -30,6 +31,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Adapter for Ollama's native API. Speaks /api/chat and /api/tags directly and
@@ -42,14 +44,22 @@ public class OllamaProvider implements LLMProvider {
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration RESPONSE_TIMEOUT = Duration.ofMinutes(5);
+    private static final Duration DEFAULT_STREAM_IDLE_TIMEOUT = Duration.ofSeconds(60);
 
     private final String name;
     private final WebClient client;
     private final ObjectMapper mapper;
+    private final Duration streamIdleTimeout;
 
     public OllamaProvider(String name, String baseUrl, WebClient.Builder builder, ObjectMapper mapper) {
+        this(name, baseUrl, builder, mapper, null);
+    }
+
+    public OllamaProvider(String name, String baseUrl, WebClient.Builder builder, ObjectMapper mapper,
+                          Duration streamIdleTimeout) {
         this.name = name;
         this.mapper = mapper;
+        this.streamIdleTimeout = streamIdleTimeout == null ? DEFAULT_STREAM_IDLE_TIMEOUT : streamIdleTimeout;
         HttpClient http = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) CONNECT_TIMEOUT.toMillis())
                 .responseTimeout(RESPONSE_TIMEOUT);
@@ -95,8 +105,12 @@ public class OllamaProvider implements LLMProvider {
                             .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
                     // Ollama streams NDJSON; the default String decoder splits it into lines.
                     .bodyToFlux(String.class)
+                    // Idle timeout between chunks, not total request time (§10).
+                    .timeout(streamIdleTimeout)
                     .concatMap(line -> Flux.fromIterable(normalizeLine(line, state)))
-                    .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
+                    .onErrorMap(TimeoutException.class, e -> new StreamIdleTimeoutException(name, streamIdleTimeout))
+                    .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e))
+                    .doOnCancel(() -> log.info("Provider '{}': client cancelled stream; upstream connection closed", name));
         });
     }
 

@@ -25,13 +25,15 @@ public class ProviderConfiguration {
         LinkedHashMap<String, LLMProvider> providers = new LinkedHashMap<>();
         for (GatewayProperties.ProviderProps p : properties.providers()) {
             LLMProvider provider = switch (p.type()) {
-                case "ollama" -> new OllamaProvider(p.name(), p.baseUrl(), webClientBuilder, objectMapper);
+                case "ollama" -> new OllamaProvider(p.name(), p.baseUrl(), webClientBuilder, objectMapper,
+                        p.streamIdleTimeout());
                 case "gemini" -> {
                     if (p.apiKey() == null || p.apiKey().isBlank()) {
                         throw new IllegalStateException(
                                 "Provider '" + p.name() + "' (gemini) requires an api-key");
                     }
-                    yield new GeminiProvider(p.name(), p.baseUrl(), p.apiKey(), webClientBuilder, objectMapper);
+                    yield new GeminiProvider(p.name(), p.baseUrl(), p.apiKey(), webClientBuilder, objectMapper,
+                            p.streamIdleTimeout());
                 }
                 default -> throw new IllegalStateException(
                         "Unknown provider type '" + p.type() + "' for provider '" + p.name() + "'");

@@ -3,6 +3,7 @@ package com.shreyasnandurkar.botvinnikapi.providers.gemini;
 import com.shreyasnandurkar.botvinnikapi.core.LLMProvider;
 import com.shreyasnandurkar.botvinnikapi.core.error.InvalidRequestException;
 import com.shreyasnandurkar.botvinnikapi.core.error.ProviderUnreachableException;
+import com.shreyasnandurkar.botvinnikapi.core.error.StreamIdleTimeoutException;
 import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
@@ -29,6 +30,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Adapter for the Gemini API. Genuinely different wire format from both OpenAI
@@ -44,15 +46,23 @@ public class GeminiProvider implements LLMProvider {
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Duration RESPONSE_TIMEOUT = Duration.ofMinutes(5);
+    private static final Duration DEFAULT_STREAM_IDLE_TIMEOUT = Duration.ofSeconds(60);
 
     private final String name;
     private final WebClient client;
     private final ObjectMapper mapper;
+    private final Duration streamIdleTimeout;
 
     public GeminiProvider(String name, String baseUrl, String apiKey,
                           WebClient.Builder builder, ObjectMapper mapper) {
+        this(name, baseUrl, apiKey, builder, mapper, null);
+    }
+
+    public GeminiProvider(String name, String baseUrl, String apiKey,
+                          WebClient.Builder builder, ObjectMapper mapper, Duration streamIdleTimeout) {
         this.name = name;
         this.mapper = mapper;
+        this.streamIdleTimeout = streamIdleTimeout == null ? DEFAULT_STREAM_IDLE_TIMEOUT : streamIdleTimeout;
         HttpClient http = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) CONNECT_TIMEOUT.toMillis())
                 .responseTimeout(RESPONSE_TIMEOUT);
@@ -97,8 +107,12 @@ public class GeminiProvider implements LLMProvider {
                             .defaultIfEmpty("")
                             .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
                     .bodyToFlux(String.class)
+                    // Idle timeout between chunks, not total request time (§10).
+                    .timeout(streamIdleTimeout)
                     .concatMap(data -> Flux.fromIterable(normalizeChunk(data, state)))
-                    .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
+                    .onErrorMap(TimeoutException.class, e -> new StreamIdleTimeoutException(name, streamIdleTimeout))
+                    .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e))
+                    .doOnCancel(() -> log.info("Provider '{}': client cancelled stream; upstream connection closed", name));
         });
     }
 
