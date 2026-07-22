@@ -49,6 +49,10 @@ public class ProviderStatsRegistry {
             return fastTtftMs;
         }
 
+        public double ttftBaselineMs() {
+            return slowTtftMs;
+        }
+
         /** TTFT climbing well above its own baseline — queue is building (§9). */
         public boolean isDegraded() {
             return slowTtftMs > 0 && fastTtftMs > DEGRADED_FACTOR * slowTtftMs;

@@ -307,6 +307,33 @@ class ControlPlaneApiTest {
                 .expectBody().jsonPath("$.error.param").isEqualTo("pool");
     }
 
+    @Test
+    void statsAggregateRecentTraffic() {
+        client.get().uri("/v1/stats?window_minutes=15")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.window_minutes").isEqualTo(15)
+                .jsonPath("$.requests").isNumber()
+                .jsonPath("$.error_rate").isNumber();
+    }
+
+    @Test
+    void dashboardIsServed() {
+        client.get().uri("/dashboard")
+                .exchange()
+                .expectStatus().isFound()
+                .expectHeader().location("/dashboard/index.html");
+        client.get().uri("/dashboard/index.html")
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().contentTypeCompatibleWith(MediaType.TEXT_HTML)
+                .expectBody(String.class).value(html -> {
+                    org.assertj.core.api.Assertions.assertThat(html).contains("BotvinnikAPI");
+                    org.assertj.core.api.Assertions.assertThat(html).contains("/v1/health");
+                });
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     private void registerInPool(String name, String baseUrl, String pool) {

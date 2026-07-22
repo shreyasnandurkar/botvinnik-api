@@ -55,15 +55,19 @@ public class HealthController {
             status = "HEALTHY";
         }
         double ttft = providerStats.ttftEwmaMs();
+        double baseline = providerStats.ttftBaselineMs();
         return new ProviderHealthView(status, circuit, providerStats.inFlight(),
-                ttft < 0 ? null : Math.round(ttft * 10) / 10.0, pingMs);
+                ttft < 0 ? null : Math.round(ttft * 10) / 10.0,
+                baseline < 0 ? null : Math.round(baseline * 10) / 10.0, pingMs);
     }
 
+    /** baseline = the slow EWMA; the fast/baseline gap is the TTFT trend (§9). */
     public record ProviderHealthView(
             String status,
             String circuit,
             @JsonProperty("in_flight") int inFlight,
             @JsonProperty("ttft_ewma_ms") Double ttftEwmaMs,
+            @JsonProperty("ttft_baseline_ms") Double ttftBaselineMs,
             @JsonProperty("ping_ms") Long pingMs) {
     }
 }

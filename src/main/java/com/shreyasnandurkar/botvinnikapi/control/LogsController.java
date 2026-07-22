@@ -41,6 +41,16 @@ public class LogsController {
             @JsonProperty("response_excerpt") String responseExcerpt) {
     }
 
+    public record StatsView(
+            @JsonProperty("window_minutes") int windowMinutes,
+            long requests,
+            @JsonProperty("requests_per_min") double requestsPerMin,
+            @JsonProperty("error_rate") double errorRate,
+            @JsonProperty("ttft_p50_ms") Double ttftP50Ms,
+            @JsonProperty("ttft_p95_ms") Double ttftP95Ms,
+            @JsonProperty("ttft_p99_ms") Double ttftP99Ms) {
+    }
+
     public record UsageRow(
             @JsonProperty("api_key") String apiKey,
             String provider,
@@ -90,6 +100,33 @@ public class LogsController {
             spec = spec.bind((String) bind[0], bind[1]);
         }
         return spec.map(LogsController::logRow).all().collectList();
+    }
+
+    /** §16's traffic row: rate, error share, TTFT percentiles over a recent window. */
+    @GetMapping("/v1/stats")
+    public Mono<StatsView> stats(@RequestParam(name = "window_minutes", defaultValue = "15") int windowMinutes) {
+        int window = Math.clamp(windowMinutes, 1, 24 * 60);
+        return db.sql("""
+                        SELECT COUNT(*) AS requests,
+                               COUNT(*) FILTER (WHERE outcome IN ('error', 'partial')) AS failures,
+                               percentile_cont(0.5)  WITHIN GROUP (ORDER BY ttft_ms) AS p50,
+                               percentile_cont(0.95) WITHIN GROUP (ORDER BY ttft_ms) AS p95,
+                               percentile_cont(0.99) WITHIN GROUP (ORDER BY ttft_ms) AS p99
+                        FROM request_logs
+                        WHERE ts > now() - make_interval(mins => :window)
+                        """)
+                .bind("window", window)
+                .map((row, meta) -> {
+                    long requests = longOrZero(row, "requests");
+                    long failures = longOrZero(row, "failures");
+                    return new StatsView(window, requests,
+                            Math.round(requests * 100.0 / window) / 100.0,
+                            requests == 0 ? 0 : Math.round(failures * 1000.0 / requests) / 1000.0,
+                            row.get("p50", Double.class),
+                            row.get("p95", Double.class),
+                            row.get("p99", Double.class));
+                })
+                .one();
     }
 
     @GetMapping("/v1/usage")
