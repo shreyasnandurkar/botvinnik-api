@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: botvinnikAPI
+  http:
+    codecs:
+      max-in-memory-size: 2MB
   r2dbc:
     url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:botvinnik}
     username: ${DB_USER:botvinnik}
@@ -14,6 +17,26 @@ spring:
     password: ${DB_PASSWORD:botvinnik}
 
 botvinnik:
+  security:
+    auth-enabled: ${AUTH_ENABLED:true}
+    encryption-key: ${GATEWAY_ENCRYPTION_KEY:}
+    # A LAN gateway must reach LAN GPUs (§15's own demo registers 192.168.1.15);
+    # link-local / metadata / CGNAT stay blocked unless explicitly listed here.
+    allowed-cidrs:
+      - 127.0.0.0/8
+      - ::1/128
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+  limits:
+    max-prompt-chars: 400000
+  pricing:
+    - model: gemini-2.5-flash
+      input-usd-per-1m: 0.30
+      output-usd-per-1m: 2.50
+    - model: gemini-2.5-flash-lite
+      input-usd-per-1m: 0.10
+      output-usd-per-1m: 0.40
   providers:
     - name: local-ollama
       type: ollama

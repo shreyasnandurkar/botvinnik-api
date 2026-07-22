@@ -75,7 +75,6 @@ public final class OpenAiDtos {
 
     // ── streaming wire shapes ───────────────────────────────────────────────
 
-    /** One SSE frame's payload. The usage-only frame (stream_options) has choices: [] and usage set. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ChatCompletionChunk(
             String id,
@@ -93,7 +92,6 @@ public final class OpenAiDtos {
             @JsonProperty("finish_reason") String finishReason) {
     }
 
-    /** The final frame's delta serializes as the empty object {}, per OpenAI. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record Delta(
             String role,

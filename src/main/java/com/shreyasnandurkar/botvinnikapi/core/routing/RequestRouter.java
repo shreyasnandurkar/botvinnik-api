@@ -2,6 +2,7 @@ package com.shreyasnandurkar.botvinnikapi.core.routing;
 
 import com.shreyasnandurkar.botvinnikapi.core.LLMProvider;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
+import com.shreyasnandurkar.botvinnikapi.core.error.GatewayException;
 import com.shreyasnandurkar.botvinnikapi.core.error.NoAvailableProviderException;
 import com.shreyasnandurkar.botvinnikapi.core.error.ProviderUnreachableException;
 import com.shreyasnandurkar.botvinnikapi.core.error.StreamIdleTimeoutException;
@@ -9,6 +10,11 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.Message;
+import com.shreyasnandurkar.botvinnikapi.core.model.TokenUsage;
+import com.shreyasnandurkar.botvinnikapi.telemetry.RequestLogEntry;
+import com.shreyasnandurkar.botvinnikapi.telemetry.RequestTelemetry;
+import com.shreyasnandurkar.botvinnikapi.telemetry.TelemetryContext;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
 import org.slf4j.Logger;
@@ -16,8 +22,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 
+import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 /**
@@ -29,15 +39,19 @@ import java.util.function.Function;
 public class RequestRouter {
 
     private static final Logger log = LoggerFactory.getLogger(RequestRouter.class);
+    private static final int EXCERPT_CHARS = 2_000;
 
     private final PoolBalancer balancer;
     private final ProviderStatsRegistry stats;
     private final CircuitBreakers breakers;
+    private final RequestTelemetry telemetry;
 
-    public RequestRouter(PoolBalancer balancer, ProviderStatsRegistry stats, CircuitBreakers breakers) {
+    public RequestRouter(PoolBalancer balancer, ProviderStatsRegistry stats, CircuitBreakers breakers,
+                         RequestTelemetry telemetry) {
         this.balancer = balancer;
         this.stats = stats;
         this.breakers = breakers;
+        this.telemetry = telemetry;
     }
 
     public Mono<ChatResponse> chat(ProviderRegistry.RoutePlan plan, Function<String, ChatRequest> requestFor) {
@@ -57,7 +71,7 @@ public class RequestRouter {
         ProviderRegistry.Attempt attempt = plan.attempts().get(index);
         return Mono.defer(() -> {
             LLMProvider provider = balancer.pick(attempt);
-            return instrumented(provider, provider.chat(requestFor.apply(attempt.model())));
+            return instrumented(provider, requestFor.apply(attempt.model()));
         }).onErrorResume(e -> {
             if (index + 1 < plan.attempts().size() && isFailoverable(e)) {
                 log.warn("Attempt {} for '{}' failed at connect ({}); failing over",
@@ -74,7 +88,7 @@ public class RequestRouter {
         AtomicBoolean emitted = new AtomicBoolean();
         return Flux.defer(() -> {
             LLMProvider provider = balancer.pick(attempt);
-            return instrumented(provider, provider.stream(requestFor.apply(attempt.model())));
+            return instrumentedStream(provider, requestFor.apply(attempt.model()));
         }).doOnNext(chunk -> emitted.set(true))
                 .onErrorResume(e -> {
                     // §10: failover only while nothing has been flushed to the client.
@@ -99,31 +113,108 @@ public class RequestRouter {
         return last;
     }
 
-    private Mono<ChatResponse> instrumented(LLMProvider provider, Mono<ChatResponse> call) {
+    private Mono<ChatResponse> instrumented(LLMProvider provider, ChatRequest request) {
         ProviderStatsRegistry.ProviderStats providerStats = stats.of(provider.name());
-        return Mono.defer(() -> {
+        return Mono.deferContextual(ctx -> {
+            TelemetryContext tele = ctx.getOrDefault(TelemetryContext.class, TelemetryContext.NONE);
             long start = System.nanoTime();
             providerStats.started();
-            return call.transformDeferred(CircuitBreakerOperator.of(breakers.of(provider.name())))
-                    .doOnNext(r -> providerStats.recordTtft(millisSince(start)))
-                    .doFinally(signal -> providerStats.finished());
+            AtomicLong ttft = new AtomicLong(-1);
+            AtomicReference<ChatResponse> result = new AtomicReference<>();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            return provider.chat(request)
+                    .transformDeferred(CircuitBreakerOperator.of(breakers.of(provider.name())))
+                    .doOnNext(r -> {
+                        long millis = millisSince(start);
+                        providerStats.recordTtft(millis);
+                        ttft.set(millis);
+                        result.set(r);
+                    })
+                    .doOnError(failure::set)
+                    .doFinally(signal -> {
+                        providerStats.finished();
+                        ChatResponse response = result.get();
+                        telemetry.record(entry(tele, provider, request, signal,
+                                millisSince(start), ttft.get(), failure.get(), response == null,
+                                response == null ? null : response.usage(),
+                                response == null ? null : response.content()));
+                    });
         });
     }
 
-    private Flux<ChatChunk> instrumented(LLMProvider provider, Flux<ChatChunk> call) {
+    private Flux<ChatChunk> instrumentedStream(LLMProvider provider, ChatRequest request) {
         ProviderStatsRegistry.ProviderStats providerStats = stats.of(provider.name());
-        return Flux.defer(() -> {
+        return Flux.deferContextual(ctx -> {
+            TelemetryContext tele = ctx.getOrDefault(TelemetryContext.class, TelemetryContext.NONE);
             long start = System.nanoTime();
-            AtomicBoolean first = new AtomicBoolean(true);
             providerStats.started();
-            return call.transformDeferred(CircuitBreakerOperator.of(breakers.of(provider.name())))
+            AtomicLong ttft = new AtomicLong(-1);
+            AtomicReference<TokenUsage> usage = new AtomicReference<>();
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            StringBuilder content = tele.logContent() ? new StringBuilder() : null;
+            return provider.stream(request)
+                    .transformDeferred(CircuitBreakerOperator.of(breakers.of(provider.name())))
                     .doOnNext(chunk -> {
-                        if (first.compareAndSet(true, false)) {
-                            providerStats.recordTtft(millisSince(start));
+                        if (ttft.compareAndSet(-1, 0)) {
+                            long millis = millisSince(start);
+                            providerStats.recordTtft(millis);
+                            ttft.set(millis);
+                        }
+                        if (chunk.usage() != null) {
+                            usage.set(chunk.usage());
+                        }
+                        if (content != null && chunk.contentDelta() != null
+                                && content.length() < EXCERPT_CHARS) {
+                            content.append(chunk.contentDelta());
                         }
                     })
-                    .doFinally(signal -> providerStats.finished());
+                    .doOnError(failure::set)
+                    .doFinally(signal -> {
+                        providerStats.finished();
+                        telemetry.record(entry(tele, provider, request, signal,
+                                millisSince(start), ttft.get(), failure.get(), ttft.get() < 0,
+                                usage.get(), content == null ? null : content.toString()));
+                    });
         });
+    }
+
+    private RequestLogEntry entry(TelemetryContext tele, LLMProvider provider, ChatRequest request,
+                                  SignalType signal, long latencyMs, long ttftMs, Throwable error,
+                                  boolean nothingReceived, TokenUsage usage, String responseContent) {
+        String outcome = switch (signal) {
+            case ON_COMPLETE -> "success";
+            case CANCEL -> "cancelled";
+            // A stream that dies after the first chunk is a partial failure (§10).
+            case ON_ERROR -> nothingReceived ? "error" : "partial";
+            default -> signal.toString();
+        };
+        String errorCode = error == null ? null
+                : error instanceof GatewayException ge ? ge.code() : error.getClass().getSimpleName();
+        return new RequestLogEntry(
+                tele.apiKeyId(), provider.name(), request.model(), Instant.now(),
+                latencyMs, ttftMs < 0 ? null : ttftMs,
+                usage == null ? null : usage.promptTokens(),
+                usage == null ? null : usage.completionTokens(),
+                outcome, errorCode,
+                tele.logContent() ? excerpt(lastUserMessage(request)) : null,
+                tele.logContent() ? excerpt(responseContent) : null);
+    }
+
+    private static String lastUserMessage(ChatRequest request) {
+        for (int i = request.messages().size() - 1; i >= 0; i--) {
+            Message m = request.messages().get(i);
+            if ("user".equals(m.role()) && m.content() != null) {
+                return m.content();
+            }
+        }
+        return null;
+    }
+
+    private static String excerpt(String text) {
+        if (text == null || text.isEmpty()) {
+            return null;
+        }
+        return text.length() <= EXCERPT_CHARS ? text : text.substring(0, EXCERPT_CHARS);
     }
 
     /** Connect-class failures only — nothing on the wire yet, so failover is free (§10). */

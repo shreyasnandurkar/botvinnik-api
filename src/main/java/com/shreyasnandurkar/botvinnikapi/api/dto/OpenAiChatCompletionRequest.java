@@ -15,9 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Inbound OpenAI wire request. A mutable class (not a record) so {@code @JsonAnySetter}
- * can capture parameters we did not declare — §5 stage 3: reject unknown params loudly
- * rather than silently dropping them.
+ * Inbound OpenAI wire request.
  */
 public class OpenAiChatCompletionRequest {
 
@@ -30,10 +28,9 @@ public class OpenAiChatCompletionRequest {
     public Integer maxTokens;
     @JsonProperty("max_completion_tokens")
     public Integer maxCompletionTokens;
-    /** String or array of strings — normalized in {@link #stopList()}. */
     public JsonNode stop;
     public Boolean stream;
-    /** Only {"include_usage": bool} is honored — anything else is rejected in validate(). */
+    /** Only {"include_usage": bool} is honored.*/
     @JsonProperty("stream_options")
     public JsonNode streamOptions;
     public List<IncomingTool> tools;
@@ -47,9 +44,7 @@ public class OpenAiChatCompletionRequest {
      */
     @JsonProperty("reasoning_effort")
     public String reasoningEffort;
-    /** Declared so we can reject n > 1 specifically instead of "unknown param". */
     public Integer n;
-    /** OpenAI treats this as telemetry; accepting it costs nothing. */
     public String user;
 
     private final Map<String, JsonNode> unknown = new LinkedHashMap<>();
@@ -111,6 +106,24 @@ public class OpenAiChatCompletionRequest {
                         "messages");
             }
         }
+    }
+
+    /** Cheap size proxy for §20's max-prompt limit — rejected at ingress, before dispatch. */
+    public long promptChars() {
+        long total = 0;
+        for (IncomingMessage m : messages) {
+            if (m.content == null) {
+                continue;
+            }
+            if (m.content.isTextual()) {
+                total += m.content.textValue().length();
+            } else if (m.content.isArray()) {
+                for (JsonNode part : m.content) {
+                    total += part.path("text").asString("").length();
+                }
+            }
+        }
+        return total;
     }
 
     /** Map into the universal ChatRequest, with the model name already resolved. */

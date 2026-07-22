@@ -2,6 +2,8 @@ package com.shreyasnandurkar.botvinnikapi.config;
 
 import com.shreyasnandurkar.botvinnikapi.control.db.AliasEntity;
 import com.shreyasnandurkar.botvinnikapi.control.db.AliasRepository;
+import com.shreyasnandurkar.botvinnikapi.control.db.ApiKeyEntity;
+import com.shreyasnandurkar.botvinnikapi.control.db.ApiKeyRepository;
 import com.shreyasnandurkar.botvinnikapi.control.db.PoolEntity;
 import com.shreyasnandurkar.botvinnikapi.control.db.PoolRepository;
 import com.shreyasnandurkar.botvinnikapi.control.db.ProviderEntity;
@@ -9,6 +11,7 @@ import com.shreyasnandurkar.botvinnikapi.control.db.ProviderRepository;
 import com.shreyasnandurkar.botvinnikapi.core.LLMProvider;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderFactory;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
+import com.shreyasnandurkar.botvinnikapi.security.KeyCrypto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -37,16 +40,23 @@ public class ConfigSnapshotService {
     private final ProviderRepository providerRepository;
     private final AliasRepository aliasRepository;
     private final PoolRepository poolRepository;
+    private final ApiKeyRepository apiKeyRepository;
     private final ProviderFactory factory;
+    private final KeyCrypto crypto;
     private final ObjectMapper mapper;
     private final AtomicReference<ProviderRegistry> snapshot = new AtomicReference<>(ProviderRegistry.empty());
+    private final AtomicReference<Map<String, ApiKeyEntity>> apiKeysByHash = new AtomicReference<>(Map.of());
+    private final AtomicReference<Map<String, UUID>> providerIdsByName = new AtomicReference<>(Map.of());
 
     public ConfigSnapshotService(ProviderRepository providerRepository, AliasRepository aliasRepository,
-                                 PoolRepository poolRepository, ProviderFactory factory, ObjectMapper mapper) {
+                                 PoolRepository poolRepository, ApiKeyRepository apiKeyRepository,
+                                 ProviderFactory factory, KeyCrypto crypto, ObjectMapper mapper) {
         this.providerRepository = providerRepository;
         this.aliasRepository = aliasRepository;
         this.poolRepository = poolRepository;
+        this.apiKeyRepository = apiKeyRepository;
         this.factory = factory;
+        this.crypto = crypto;
         this.mapper = mapper;
     }
 
@@ -54,13 +64,29 @@ public class ConfigSnapshotService {
         return snapshot.get();
     }
 
+    public ApiKeyEntity apiKeyByHash(String hash) {
+        return apiKeysByHash.get().get(hash);
+    }
+
+    public UUID providerId(String name) {
+        return providerIdsByName.get().get(name);
+    }
+
     public Mono<Void> rebuild() {
         return Mono.zip(
                         providerRepository.findAllByOrderByCreatedAt().collectList(),
                         aliasRepository.findAll().collectList(),
-                        poolRepository.findAll().collectList())
-                .map(t -> build(t.getT1(), t.getT2(), t.getT3()))
-                .doOnNext(snapshot::set)
+                        poolRepository.findAll().collectList(),
+                        apiKeyRepository.findAll().collectList())
+                .doOnNext(t -> {
+                    snapshot.set(build(t.getT1(), t.getT2(), t.getT3()));
+                    Map<String, ApiKeyEntity> keys = new HashMap<>();
+                    t.getT4().forEach(k -> keys.put(k.keyHash(), k));
+                    apiKeysByHash.set(keys);
+                    Map<String, UUID> ids = new HashMap<>();
+                    t.getT1().forEach(p -> ids.put(p.name(), p.id()));
+                    providerIdsByName.set(ids);
+                })
                 .then();
     }
 
@@ -75,7 +101,7 @@ public class ConfigSnapshotService {
             }
             try {
                 providers.put(row.name(), factory.create(
-                        row.name(), row.type(), row.baseUrl(), row.apiKey(),
+                        row.name(), row.type(), row.baseUrl(), plaintextKey(row),
                         row.streamIdleTimeoutMs() == null ? null : Duration.ofMillis(row.streamIdleTimeoutMs())));
             } catch (Exception e) {
                 // One broken row must not take down every other provider's routing.
@@ -104,6 +130,14 @@ public class ConfigSnapshotService {
         log.info("Config snapshot rebuilt: {} active providers, {} aliases, {} pools",
                 providers.size(), aliases.size(), poolsByName.size());
         return new ProviderRegistry(providers, aliases, poolsByName, poolByProvider);
+    }
+
+    /** null nonce = legacy plaintext row (pre-V2, or mid-upgrade at boot). */
+    private String plaintextKey(ProviderEntity row) {
+        if (row.encryptedApiKey() == null || row.nonce() == null) {
+            return row.encryptedApiKey();
+        }
+        return crypto.decrypt(row.encryptedApiKey(), row.nonce());
     }
 
     private List<String> readFallbacks(AliasEntity row) {

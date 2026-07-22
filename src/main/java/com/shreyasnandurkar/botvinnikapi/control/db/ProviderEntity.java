@@ -6,13 +6,15 @@ import org.springframework.data.relational.core.mapping.Table;
 import java.time.Instant;
 import java.util.UUID;
 
+/** encryptedApiKey is AES-GCM ciphertext; a null nonce marks a legacy plaintext row (§11). */
 @Table("providers")
 public record ProviderEntity(
         @Id UUID id,
         String name,
         String type,
         String baseUrl,
-        String apiKey,
+        String encryptedApiKey,
+        String nonce,
         Long streamIdleTimeoutMs,
         UUID poolId,
         String status,

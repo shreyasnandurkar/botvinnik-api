@@ -35,7 +35,8 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
  * Control-plane contract: a provider registered over REST must be routable on
  * the very next data-plane request — write → snapshot rebuild → hot path.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "botvinnik.security.auth-enabled=false")
 @AutoConfigureWebTestClient
 @Import(TestcontainersConfiguration.class)
 class ControlPlaneApiTest {
@@ -299,8 +300,8 @@ class ControlPlaneApiTest {
         client.post().uri("/v1/providers")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("""
-                        {"name":"orphan","type":"ollama","base_url":"http://x","pool":"nope"}
-                        """)
+                        {"name":"orphan","type":"ollama","base_url":"%s","pool":"nope"}
+                        """.formatted(wiremock.baseUrl()))
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.error.param").isEqualTo("pool");

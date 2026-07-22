@@ -27,7 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Full-stack contract test: an OpenAI-shaped request goes in over HTTP, WireMock
  * plays Ollama upstream, and an OpenAI-shaped response must come out.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "botvinnik.security.auth-enabled=false")
 @AutoConfigureWebTestClient
 @Import(TestcontainersConfiguration.class)
 class ChatCompletionsApiTest {

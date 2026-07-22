@@ -77,7 +77,8 @@ class RoutingFailoverTest {
         backup.resetAll();
         stats = new ProviderStatsRegistry();
         breakers = new CircuitBreakers();
-        router = new RequestRouter(new PoolBalancer(stats, breakers), stats, breakers);
+        router = new RequestRouter(new PoolBalancer(stats, breakers), stats, breakers, entry -> {
+        });
         registry = registryWithPrimaryAt("http://localhost:" + primary.port());
     }
 

@@ -2,10 +2,12 @@ package com.shreyasnandurkar.botvinnikapi.control.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shreyasnandurkar.botvinnikapi.control.db.AliasEntity;
+import com.shreyasnandurkar.botvinnikapi.control.db.ApiKeyEntity;
 import com.shreyasnandurkar.botvinnikapi.control.db.ProviderEntity;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderFactory;
 import com.shreyasnandurkar.botvinnikapi.core.error.InvalidRequestException;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -149,6 +151,57 @@ public final class ControlDtos {
 
         public static AliasResponse from(AliasEntity e, String providerName, List<String> fallbacks) {
             return new AliasResponse(e.id(), e.alias(), providerName + "/" + e.targetModel(), fallbacks);
+        }
+    }
+
+    public record CreateApiKeyRequest(
+            String name,
+            @JsonProperty("rate_limit_rpm") Integer rateLimitRpm,
+            @JsonProperty("spend_cap_usd") BigDecimal spendCapUsd,
+            @JsonProperty("log_content") Boolean logContent,
+            @JsonProperty("max_tokens_cap") Integer maxTokensCap) {
+
+        public void validate() {
+            if (name == null || !NAME.matcher(name).matches()) {
+                throw new InvalidRequestException(
+                        "'name' is required and may only contain letters, digits, '.', '_' and '-'.", "name");
+            }
+            if (rateLimitRpm != null && rateLimitRpm <= 0) {
+                throw new InvalidRequestException("'rate_limit_rpm' must be positive.", "rate_limit_rpm");
+            }
+            if (spendCapUsd != null && spendCapUsd.signum() <= 0) {
+                throw new InvalidRequestException("'spend_cap_usd' must be positive.", "spend_cap_usd");
+            }
+            if (maxTokensCap != null && maxTokensCap <= 0) {
+                throw new InvalidRequestException("'max_tokens_cap' must be positive.", "max_tokens_cap");
+            }
+        }
+    }
+
+    /** The only response that ever carries the raw key — it is not stored (§11). */
+    public record ApiKeyCreatedResponse(
+            UUID id,
+            String key,
+            String name,
+            @JsonProperty("rate_limit_rpm") Integer rateLimitRpm,
+            @JsonProperty("spend_cap_usd") BigDecimal spendCapUsd,
+            @JsonProperty("log_content") boolean logContent,
+            @JsonProperty("max_tokens_cap") Integer maxTokensCap) {
+    }
+
+    public record ApiKeyResponse(
+            UUID id,
+            String name,
+            @JsonProperty("rate_limit_rpm") Integer rateLimitRpm,
+            @JsonProperty("spend_cap_usd") BigDecimal spendCapUsd,
+            @JsonProperty("log_content") boolean logContent,
+            @JsonProperty("max_tokens_cap") Integer maxTokensCap,
+            @JsonProperty("created_at") Instant createdAt,
+            @JsonProperty("last_used_at") Instant lastUsedAt) {
+
+        public static ApiKeyResponse from(ApiKeyEntity e) {
+            return new ApiKeyResponse(e.id(), e.name(), e.rateLimitRpm(), e.spendCapUsd(),
+                    e.logContent(), e.maxTokensCap(), e.createdAt(), e.lastUsedAt());
         }
     }
 
