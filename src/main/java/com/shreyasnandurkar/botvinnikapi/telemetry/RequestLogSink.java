@@ -45,8 +45,9 @@ public class RequestLogSink implements RequestTelemetry {
         this.snapshots = snapshots;
         this.priceBook = priceBook;
         this.spendTracker = spendTracker;
-        this.drain = Flux.interval(Duration.ofSeconds(1))
-                .concatMap(tick -> drainBatch())
+        this.drain = Mono.defer(this::drainBatch)
+                .then(Mono.delay(Duration.ofSeconds(1)))
+                .repeat()
                 .subscribe();
     }
 
