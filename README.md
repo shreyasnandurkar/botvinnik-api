@@ -35,13 +35,13 @@ That `model="assistant"` is the core trick: it's an **alias** the operator maps 
 
 | | |
 |---|---|
-| 🔌 **OpenAI-compatible data plane** | `/v1/chat/completions` (streaming + non-streaming) and `/v1/models`, with tool calls, `reasoning_content`, and SSE framing that terminates in `[DONE]` |
-| 🔀 **Native provider adapters** | Ollama (NDJSON) and Gemini (SSE) — each speaks its provider's real wire format, and chunk shapes are normalized into one universal stream |
-| 🏊 **Pools + load balancing** | P2C (power-of-two-choices), least-connections, or round-robin across identical backends, keyed on **live in-flight depth**, not request counts |
-| 💔 **Circuit breakers + failover** | Connect-time failures walk the alias fallback chain; a dead provider is short-circuited after 4 failures and probed back to life automatically |
-| 📈 **TTFT-based health** | Providers are `HEALTHY / DEGRADED / OPEN / DOWN` from a dual-rate moving average of time-to-first-token — degradation is detected *before* hard failure |
-| 🔐 **Auth + hardening** | SHA-256-hashed gateway keys (shown once), Bucket4j rate limits, USD spend caps, AES-GCM-encrypted provider credentials, DNS-rebinding-proof SSRF guard |
-| 📊 **Telemetry + dashboard** | Request logs with cost attribution in partitioned Postgres, `/v1/usage`, `/v1/stats` percentiles, and a zero-dependency read-only dashboard at `/dashboard` |
+| **OpenAI-compatible data plane** | `/v1/chat/completions` (streaming + non-streaming) and `/v1/models`, with tool calls, `reasoning_content`, and SSE framing that terminates in `[DONE]` |
+| **Native provider adapters** | Ollama (NDJSON) and Gemini (SSE) — each speaks its provider's real wire format, and chunk shapes are normalized into one universal stream |
+| **Pools + load balancing** | P2C (power-of-two-choices), least-connections, or round-robin across identical backends, keyed on **live in-flight depth**, not request counts |
+| **Circuit breakers + failover** | Connect-time failures walk the alias fallback chain; a dead provider is short-circuited after 4 failures and probed back to life automatically |
+| **TTFT-based health** | Providers are `HEALTHY / DEGRADED / OPEN / DOWN` from a dual-rate moving average of time-to-first-token — degradation is detected *before* hard failure |
+| **Auth + hardening** | SHA-256-hashed gateway keys (shown once), Bucket4j rate limits, USD spend caps, AES-GCM-encrypted provider credentials, DNS-rebinding-proof SSRF guard |
+| **Telemetry + dashboard** | Request logs with cost attribution in partitioned Postgres, `/v1/usage`, `/v1/stats` percentiles, and a zero-dependency read-only dashboard at `/dashboard` |
 
 ## The ops view
 
@@ -100,6 +100,30 @@ flowchart LR
 ```
 
 **The load-bearing rule:** the data plane never makes a synchronous database call. Every request is served from an in-memory config snapshot that is atomically rebuilt on each control-plane write. The hot path costs one SHA-256, a few map lookups, and one JSON transform — the database exists for the operator, not the request.
+
+## Tech stack
+
+| | |
+|---|---|
+| **Language / build** | Java 25 · Maven  |
+| **Framework** | Spring Boot 4.1 · Spring WebFlux on Netty Engine |
+| **Reactive** | Project Reactor · WebClient |
+| **Database** | PostgreSQL · Spring Data R2DBC · Flyway |
+| **Resilience** | Resilience4j · Bucket4j |
+| **Crypto** | JDK `MessageDigest` (SHA-256) · `javax.crypto` (AES-GCM-256) |
+| **Providers** | Ollama · Google Gemini — native HTTP, no vendor SDKs |
+| **Dashboard** | Plain HTML/CSS/JS |
+| **Testing** | JUnit 5 · WebTestClient · WireMock · Testcontainers |
+| **Tooling** | Lombok · DevTools · Docker |
+
+**Deliberately not used:**
+
+- **Spring MVC** — blocking servlet stack; every open stream would hold a thread.
+- **JPA / Hibernate** — R2DBC already covers the control plane; no second persistence stack.
+- **Spring Security** — auth is one filter and a hash lookup.
+- **Redis** — single node, so the config snapshot and rate-limit buckets stay in memory.
+- **Vendor SDKs** — adapters speak each provider's wire format directly.
+- **A JS framework** — the dashboard is one read-only page.
 
 ## Design decisions that matter
 
