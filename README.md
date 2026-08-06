@@ -9,7 +9,7 @@
     <img alt="WebFlux" src="https://img.shields.io/badge/reactive-WebFlux%20%2B%20Netty-6db33f">
     <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-R2DBC%20%2B%20Flyway-336791">
     <img alt="Tests" src="https://img.shields.io/badge/tests-93%20passing-3fb96b">
-    <img alt="Overhead" src="https://img.shields.io/badge/gateway%20overhead-~0.3ms%20p50-5b9dd9">
+    <img alt="Overhead" src="https://img.shields.io/badge/gateway%20overhead-~0.4ms%20p50-5b9dd9">
   </p>
 </div>
 
@@ -137,16 +137,27 @@ flowchart LR
 
 ## Measured performance
 
-Benchmarked with full auth enabled against a near-zero-latency stub provider, so the numbers isolate the gateway itself (dev laptop, load generator sharing the CPU — treat as conservative):
+Reproduce with [`./bench/run-bench.ps1`](bench/README.md) — the harness is in the repo, not just its output. Full auth enabled throughout, routed to a stub provider that serves 120,000+ req/s so what is measured is the gateway and not the backend. Every run is a **pair** at the same concurrency: the same load generator straight to the stub, then through the gateway to that same stub. Overhead is the difference, so loopback TCP, JVM scheduling and the generator's own cost cancel out instead of being counted as gateway cost.
 
-| Load | Throughput | p50 | p95 | p99 | Errors |
-|---|---|---|---|---|---|
-| 10 concurrent | 6,700 req/s | 1.3 ms | 2.8 ms | 4.1 ms | 0 |
-| 50 concurrent | 9,700 req/s | 4.2 ms | 10.8 ms | 18.8 ms | 0 |
-| 200 concurrent | **~10,500 req/s** | 14.6 ms | 43.2 ms | 99.4 ms | 0 |
+Dev laptop (Ryzen AI 7 350, 16 logical CPUs), load generator sharing the machine, 30 s per run after 10 s warmup:
 
-- **Added latency at p50: ~0.3 ms** over a direct call — against a real LLM's 200–3,000 ms, the gateway disappears.
+| Load | Throughput | p50 | p90 | p95 | p99 | Errors |
+|---|---|---|---|---|---|---|
+| 10 concurrent | 20,300 req/s | 0.46 ms | 0.66 ms | 0.74 ms | 0.98 ms | 0 |
+| 50 concurrent | 33,100 req/s | 0.80 ms | 2.48 ms | 4.27 ms | 14.6 ms | 0 |
+| 200 concurrent | **~33,800 req/s** | 2.48 ms | 15.7 ms | 21.9 ms | 38.6 ms | 0 |
+
+Subtracting the direct-call baseline leaves what the gateway itself costs:
+
+| Added latency | p50 | p90 | p95 | p99 |
+|---|---|---|---|---|
+| 10 concurrent | 0.39 ms | 0.51 ms | 0.56 ms | 0.71 ms |
+| 50 concurrent | 0.44 ms | 1.86 ms | 3.55 ms | 13.6 ms |
+| 200 concurrent | 0.66 ms | 12.8 ms | 18.6 ms | 34.6 ms |
+
+- **Added latency at p50: ~0.4 ms**, and it barely moves with load — against a real LLM's 200–3,000 ms, the gateway disappears. Streaming costs 0.55 ms at p50 to first token.
 - **Zero errors** at every concurrency level, including 200-way.
+- **The p99 is GC, not routing.** Under load the gateway allocates ~110 KB per request, which is a G1 young pause every ~150 ms; each one freezes every in-flight request and the burst behind it lands at p99. So the sub-5 ms p99 budget holds comfortably to ~10 concurrent and breaks past that — and the lever on it is per-request allocation, not the request path, which stays flat at ~0.4 ms.
 - Telemetry is a **bounded 10K queue with drop-oldest** and a batched ~500 rows/s drain — a slow database degrades logging, never requests.
 - Streaming memory is O(chunk): chunks pass through, nothing accumulates; backpressure to a slow client is TCP flow control, for free.
 

@@ -28,7 +28,7 @@ One sentence: **it routes; it does not infer.**
 2. Native adapters per provider family (Ollama NDJSON, Gemini SSE), normalized into one universal request/response/chunk model.
 3. Deliberate failure semantics: failover that respects what has already been sent to the client.
 4. Load balancing suited to LLM traffic, where a request may run 200 ms or 3 minutes.
-5. Gateway overhead so small it disappears against inference latency (< 5 ms p99 budget; ~0.3 ms measured p50).
+5. Gateway overhead so small it disappears against inference latency (< 5 ms p99 budget; ~0.4 ms measured p50).
 6. Operational hygiene: authentication, rate limits, spend caps, encrypted credentials, SSRF defense, request telemetry.
 
 **Non-goals**
@@ -222,15 +222,30 @@ Managed by Flyway (V1 control plane, V2 auth/hardening). `request_logs` is range
 
 **Budget:** the gateway is never the bottleneck; inference is. Target < 5 ms p99 added overhead, O(chunk) streaming memory, no accumulation.
 
-**Measured** (full auth on, near-zero-latency stub provider isolating the gateway, dev laptop sharing CPU with the load generator):
+**Method.** The harness lives in `bench/` and the numbers below are reproduced by `./bench/run-bench.ps1`; a performance claim that ships without the thing that produced it is an assertion. Full auth is on for every run — SHA-256 bearer lookup, snapshot resolution, spend check and telemetry all execute, because the point is to price the real hot path. Two properties make the result mean something:
 
-| Concurrency | Throughput | p50 | p95 | p99 | Errors |
-|---|---|---|---|---|---|
-| 10 | 6,700 req/s | 1.3 ms | 2.8 ms | 4.1 ms | 0 |
-| 50 | 9,700 req/s | 4.2 ms | 10.8 ms | 18.8 ms | 0 |
-| 200 | ~10,500 req/s (saturation) | 14.6 ms | 43.2 ms | 99.4 ms | 0 |
+- **The backend cannot be the bottleneck.** A hand-rolled stub serves canned Ollama responses at 120,000+ req/s and 0.05 ms p50, several times what the gateway sustains. (`com.sun.net.httpserver` was rejected for this: it saturates in the same range as the gateway and would silently have become the subject of the measurement.)
+- **Overhead is measured as a difference, never an absolute.** Each concurrency level runs twice — the same raw-socket generator direct to the stub, then through the gateway to that same stub. Loopback TCP, JVM scheduling, the OS and the generator's own cost appear in both and cancel; an absolute number would be mostly those things.
 
-Added latency over a direct call at p50: **~0.3 ms**. Against a 200–3,000 ms LLM call, the gateway disappears.
+**Measured** (Ryzen AI 7 350, 16 logical CPUs, generator sharing the machine, 30 s per run after 10 s warmup):
+
+| Concurrency | Throughput | p50 | p90 | p95 | p99 | Errors |
+|---|---|---|---|---|---|---|
+| 10 | 20,300 req/s | 0.46 ms | 0.66 ms | 0.74 ms | 0.98 ms | 0 |
+| 50 | 33,100 req/s | 0.80 ms | 2.48 ms | 4.27 ms | 14.6 ms | 0 |
+| 200 | ~33,800 req/s (saturation) | 2.48 ms | 15.7 ms | 21.9 ms | 38.6 ms | 0 |
+
+Net of the direct-call baseline, the gateway's own cost:
+
+| Added latency | p50 | p90 | p95 | p99 |
+|---|---|---|---|---|
+| 10 | 0.39 ms | 0.51 ms | 0.56 ms | 0.71 ms |
+| 50 | 0.44 ms | 1.86 ms | 3.55 ms | 13.6 ms |
+| 200 | 0.66 ms | 12.8 ms | 18.6 ms | 34.6 ms |
+
+Added latency at p50 is **~0.4 ms** and near-flat across a 20× range of concurrency. Against a 200–3,000 ms LLM call, the gateway disappears. Streaming costs **0.55 ms p50 to first token**.
+
+**Against the budget, honestly:** < 5 ms p99 holds to ~10 concurrent (0.71 ms) and fails at 50 (13.6 ms) and 200 (34.6 ms). Running under `-Xlog:gc` names the cause — G1 young pauses every ~150 ms, `600M->36M`, roughly 4 GB/s of garbage or ~110 KB per request. Each pause freezes every request in flight and the burst that resumes behind it *is* the p99. That is a useful diagnosis rather than an excuse: the request path itself stays flat at ~0.4 ms across all three load levels, so the tail is allocation pressure, and per-request allocation — not routing logic — is the lever that would move it.
 
 Three self-inflicted ways a proxy like this dies, and the countermeasure for each:
 
