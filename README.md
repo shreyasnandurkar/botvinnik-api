@@ -8,8 +8,6 @@
     <img alt="Spring Boot 4.1" src="https://img.shields.io/badge/Spring%20Boot-4.1-6db33f">
     <img alt="WebFlux" src="https://img.shields.io/badge/reactive-WebFlux%20%2B%20Netty-6db33f">
     <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-R2DBC%20%2B%20Flyway-336791">
-    <img alt="Tests" src="https://img.shields.io/badge/tests-93%20passing-3fb96b">
-    <img alt="Overhead" src="https://img.shields.io/badge/gateway%20overhead-~0.4ms%20p50-5b9dd9">
   </p>
 </div>
 
