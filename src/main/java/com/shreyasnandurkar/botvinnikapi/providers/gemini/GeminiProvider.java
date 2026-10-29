@@ -14,16 +14,13 @@ import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
 import com.shreyasnandurkar.botvinnikapi.core.model.TokenUsage;
 import com.shreyasnandurkar.botvinnikapi.core.model.ToolCall;
 import com.shreyasnandurkar.botvinnikapi.core.model.ToolCallDelta;
-import io.netty.channel.ChannelOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatusCode;
-import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientRequestException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.netty.http.client.HttpClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -44,8 +41,6 @@ public class GeminiProvider implements LLMProvider {
 
     public static final String DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com";
 
-    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
-    private static final Duration RESPONSE_TIMEOUT = Duration.ofMinutes(5);
     private static final Duration DEFAULT_STREAM_IDLE_TIMEOUT = Duration.ofSeconds(60);
 
     private final String name;
@@ -63,13 +58,9 @@ public class GeminiProvider implements LLMProvider {
         this.name = name;
         this.mapper = mapper;
         this.streamIdleTimeout = streamIdleTimeout == null ? DEFAULT_STREAM_IDLE_TIMEOUT : streamIdleTimeout;
-        HttpClient http = HttpClient.create()
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) CONNECT_TIMEOUT.toMillis())
-                .responseTimeout(RESPONSE_TIMEOUT);
         this.client = builder.clone()
                 .baseUrl(baseUrl == null || baseUrl.isBlank() ? DEFAULT_BASE_URL : baseUrl)
                 .defaultHeader("x-goog-api-key", apiKey)
-                .clientConnector(new ReactorClientHttpConnector(http))
                 .build();
     }
 

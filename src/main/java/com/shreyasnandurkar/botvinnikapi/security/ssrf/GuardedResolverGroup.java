@@ -40,9 +40,10 @@ public class GuardedResolverGroup extends AddressResolverGroup<InetSocketAddress
                 return inner.isSupported(address);
             }
 
+            // Netty skips the resolver for pre-resolved addresses (IP-literal URLs); never claim one so every connect is validated.
             @Override
             public boolean isResolved(SocketAddress address) {
-                return inner.isResolved(address);
+                return false;
             }
 
             @Override
