@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **System** | BotvinnikAPI — a self-hosted LLM gateway |
-| **Status** | Implemented; all subsystems described here are built and tested (93 tests) |
+| **Status** | Implemented; all subsystems described here are built and tested (95 tests) |
 | **Stack** | Java 25 · Spring Boot 4.1 (WebFlux/Netty) · PostgreSQL (R2DBC + Flyway) · Resilience4j · Bucket4j |
 | **Deployment shape** | Single-node, single-operator; localhost or trusted LAN |
 
@@ -270,7 +270,7 @@ Backpressure in the streaming path is TCP flow control (client stalls → Netty 
 
 - **Config:** env vars — `DB_*` (Postgres), `GEMINI_API_KEY` (required at boot), `GATEWAY_ENCRYPTION_KEY` (32-byte base64; dev fallback logs a loud warning), `AUTH_ENABLED`. Providers can be seeded from `application.yaml` (insert-if-absent) or registered at runtime.
 - **Observability:** `/v1/health` (status, circuit, in-flight, TTFT fast/baseline, ping), `/v1/stats` (req/min, error rate, TTFT p50/p95/p99 over a window), `/v1/logs` (filterable history), `/v1/usage` (spend per key/provider/model), and the `/dashboard` page over all of it.
-- **Testing:** 93 tests biased toward fault injection — WireMock providers returning 5xx/garbage, raw Netty servers that die mid-body or hang, cancellation latches on connection disposal, breaker trip counts asserted at the wire level, control-plane contract tests against real Postgres (Testcontainers), SSRF/crypto unit suites, and an auth/rate-limit/spend-cap integration suite.
+- **Testing:** 95 tests biased toward fault injection — WireMock providers returning 5xx/garbage, raw Netty servers that die mid-body or hang, cancellation latches on connection disposal, breaker trip counts asserted at the wire level, control-plane contract tests against real Postgres (Testcontainers), SSRF/crypto unit suites, and an auth/rate-limit/spend-cap integration suite.
 
 ## 13. Known limitations and future work
 

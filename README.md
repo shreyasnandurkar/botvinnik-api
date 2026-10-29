@@ -112,7 +112,7 @@ flowchart LR
 | **Providers** | Ollama · Google Gemini — native HTTP, no vendor SDKs |
 | **Dashboard** | Plain HTML/CSS/JS |
 | **Testing** | JUnit 5 · WebTestClient · WireMock · Testcontainers |
-| **Tooling** | Lombok · DevTools · Docker |
+| **Tooling** | DevTools · Docker |
 
 **Deliberately not used:**
 
@@ -231,7 +231,7 @@ GET                    /v1/stats          req/min, error rate, TTFT p50/p95/p99
 
 ## Testing
 
-93 tests, biased heavily toward failure injection: WireMock providers that return `500`s and garbage, raw Netty servers that die mid-body or hang forever, cancellation-propagation asserts backed by connection-disposal latches, circuit-breaker trip counts verified at the wire level, and full control-plane contract tests against real Postgres via Testcontainers.
+95 tests, biased heavily toward failure injection: WireMock providers that return `500`s and garbage, raw Netty servers that die mid-body or hang forever, cancellation-propagation asserts backed by connection-disposal latches, circuit-breaker trip counts verified at the wire level, and full control-plane contract tests against real Postgres via Testcontainers.
 
 ```bash
 ./mvnw test

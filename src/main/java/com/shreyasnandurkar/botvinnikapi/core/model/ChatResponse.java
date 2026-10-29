@@ -17,6 +17,5 @@ public record ChatResponse(
         String finishReason,
         TokenUsage usage,
         String provider,
-        String model,
-        long latencyMs) {
+        String model) {
 }

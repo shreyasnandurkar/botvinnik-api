@@ -68,7 +68,6 @@ public class OllamaProvider implements LLMProvider {
     @Override
     public Mono<ChatResponse> chat(ChatRequest request) {
         OllamaApi.ChatRequest body = toOllamaRequest(request, false);
-        long startNanos = System.nanoTime();
         return client.post()
                 .uri("/api/chat")
                 .bodyValue(body)
@@ -77,7 +76,7 @@ public class OllamaProvider implements LLMProvider {
                         .defaultIfEmpty("")
                         .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
                 .bodyToMono(OllamaApi.ChatResponse.class)
-                .map(resp -> normalize(resp, startNanos))
+                .map(resp -> normalize(resp))
                 .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
     }
 
@@ -216,7 +215,7 @@ public class OllamaProvider implements LLMProvider {
 
     // ── response normalization ─────────────────────────────────────────────
 
-    private ChatResponse normalize(OllamaApi.ChatResponse resp, long startNanos) {
+    private ChatResponse normalize(OllamaApi.ChatResponse resp) {
         String content = resp.message() == null ? null : resp.message().content();
         String reasoning = resp.message() == null ? null : emptyToNull(resp.message().thinking());
 
@@ -239,7 +238,7 @@ public class OllamaProvider implements LLMProvider {
         return new ChatResponse(
                 content, reasoning, toolCalls,
                 normalizeFinishReason(resp.doneReason(), toolCalls != null),
-                usage, name, resp.model(), millisSince(startNanos));
+                usage, name, resp.model());
     }
 
     private static String emptyToNull(String value) {

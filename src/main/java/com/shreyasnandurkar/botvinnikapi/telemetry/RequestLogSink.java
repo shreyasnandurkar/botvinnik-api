@@ -15,7 +15,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * §13's bounded telemetry queue: fast producer, slow database. 10K cap,
@@ -29,7 +28,6 @@ public class RequestLogSink implements RequestTelemetry {
     private static final int MAX_BATCH = 500;
 
     private final ArrayBlockingQueue<PricedEntry> queue = new ArrayBlockingQueue<>(CAPACITY);
-    private final AtomicLong dropped = new AtomicLong();
     private final DatabaseClient db;
     private final ConfigSnapshotService snapshots;
     private final PriceBook priceBook;
@@ -61,12 +59,7 @@ public class RequestLogSink implements RequestTelemetry {
         PricedEntry priced = new PricedEntry(entry, cost);
         while (!queue.offer(priced)) {
             queue.poll();
-            dropped.incrementAndGet();
         }
-    }
-
-    public long dropped() {
-        return dropped.get();
     }
 
     private Mono<Void> drainBatch() {

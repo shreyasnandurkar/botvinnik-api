@@ -72,7 +72,6 @@ public class GeminiProvider implements LLMProvider {
     @Override
     public Mono<ChatResponse> chat(ChatRequest request) {
         GeminiApi.GenerateContentRequest body = toGeminiRequest(request);
-        long startNanos = System.nanoTime();
         return client.post()
                 .uri("/v1beta/models/{model}:generateContent", request.model())
                 .bodyValue(body)
@@ -81,7 +80,7 @@ public class GeminiProvider implements LLMProvider {
                         .defaultIfEmpty("")
                         .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
                 .bodyToMono(GeminiApi.GenerateContentResponse.class)
-                .map(resp -> normalize(resp, request.model(), startNanos))
+                .map(resp -> normalize(resp, request.model()))
                 .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
     }
 
@@ -268,8 +267,7 @@ public class GeminiProvider implements LLMProvider {
 
     // ── response normalization ─────────────────────────────────────────────
 
-    private ChatResponse normalize(GeminiApi.GenerateContentResponse resp, String model, long startNanos) {
-        long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
+    private ChatResponse normalize(GeminiApi.GenerateContentResponse resp, String model) {
         TokenUsage usage = resp.usageMetadata() == null ? TokenUsage.ZERO
                 : new TokenUsage(
                 nullToZero(resp.usageMetadata().promptTokenCount()),
@@ -279,7 +277,7 @@ public class GeminiProvider implements LLMProvider {
         // This is a SUCCESS with finish_reason content_filter — never an exception,
         // never a failover (the fallback model would block it too).
         if (resp.candidates() == null || resp.candidates().isEmpty()) {
-            return new ChatResponse("", null, null, "content_filter", usage, name, model, latencyMs);
+            return new ChatResponse("", null, null, "content_filter", usage, name, model);
         }
 
         GeminiApi.Candidate candidate = resp.candidates().getFirst();
@@ -308,7 +306,7 @@ public class GeminiProvider implements LLMProvider {
                 reasoning.isEmpty() ? null : reasoning.toString(),
                 toolCalls,
                 normalizeFinishReason(candidate.finishReason(), toolCalls != null),
-                usage, name, model, latencyMs);
+                usage, name, model);
     }
 
     /** Map Gemini's finishReason vocabulary onto OpenAI's. */
