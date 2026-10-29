@@ -25,6 +25,9 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.SignalType;
 
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -55,50 +58,81 @@ public class RequestRouter {
     }
 
     public Mono<ChatResponse> chat(ProviderRegistry.RoutePlan plan, Function<String, ChatRequest> requestFor) {
-        return chatAttempt(plan, 0, requestFor)
+        return chatAttempt(plan, 0, Set.of(), requestFor)
                 .onErrorMap(CallNotPermittedException.class,
                         e -> new NoAvailableProviderException(plan.requestedModel(), e));
     }
 
     public Flux<ChatChunk> stream(ProviderRegistry.RoutePlan plan, Function<String, ChatRequest> requestFor) {
-        return streamAttempt(plan, 0, requestFor)
+        return streamAttempt(plan, 0, Set.of(), requestFor)
                 .onErrorMap(CallNotPermittedException.class,
                         e -> new NoAvailableProviderException(plan.requestedModel(), e));
     }
 
-    private Mono<ChatResponse> chatAttempt(ProviderRegistry.RoutePlan plan, int index,
+    /** @param tried providers of this attempt that already failed at connect, skipped on retry */
+    private Mono<ChatResponse> chatAttempt(ProviderRegistry.RoutePlan plan, int index, Set<String> tried,
                                            Function<String, ChatRequest> requestFor) {
-        ProviderRegistry.Attempt attempt = plan.attempts().get(index);
+        ProviderRegistry.Attempt attempt = untried(plan.attempts().get(index), tried);
+        AtomicReference<String> picked = new AtomicReference<>();
         return Mono.defer(() -> {
             LLMProvider provider = balancer.pick(attempt);
+            picked.set(provider.name());
             return instrumented(provider, requestFor.apply(attempt.model()));
         }).onErrorResume(e -> {
+            if (isFailoverable(e) && attempt.candidates().size() > 1) {
+                log.warn("Provider '{}' for '{}' failed at connect ({}); retrying another candidate",
+                        picked.get(), plan.requestedModel(), e.toString());
+                return chatAttempt(plan, index, with(tried, picked.get()), requestFor);
+            }
             if (index + 1 < plan.attempts().size() && isFailoverable(e)) {
                 log.warn("Attempt {} for '{}' failed at connect ({}); failing over",
                         index, plan.requestedModel(), e.toString());
-                return chatAttempt(plan, index + 1, requestFor);
+                return chatAttempt(plan, index + 1, Set.of(), requestFor);
             }
-            return Mono.error(exhausted(plan, e));
+            return Mono.error(exhausted(plan, tried, e));
         });
     }
 
-    private Flux<ChatChunk> streamAttempt(ProviderRegistry.RoutePlan plan, int index,
+    private Flux<ChatChunk> streamAttempt(ProviderRegistry.RoutePlan plan, int index, Set<String> tried,
                                           Function<String, ChatRequest> requestFor) {
-        ProviderRegistry.Attempt attempt = plan.attempts().get(index);
+        ProviderRegistry.Attempt attempt = untried(plan.attempts().get(index), tried);
         AtomicBoolean emitted = new AtomicBoolean();
+        AtomicReference<String> picked = new AtomicReference<>();
         return Flux.defer(() -> {
             LLMProvider provider = balancer.pick(attempt);
+            picked.set(provider.name());
             return instrumentedStream(provider, requestFor.apply(attempt.model()));
         }).doOnNext(chunk -> emitted.set(true))
                 .onErrorResume(e -> {
                     // §10: failover only while nothing has been flushed to the client.
+                    if (!emitted.get() && isFailoverable(e) && attempt.candidates().size() > 1) {
+                        log.warn("Provider '{}' for '{}' failed before first chunk ({}); retrying another candidate",
+                                picked.get(), plan.requestedModel(), e.toString());
+                        return streamAttempt(plan, index, with(tried, picked.get()), requestFor);
+                    }
                     if (!emitted.get() && index + 1 < plan.attempts().size() && isFailoverable(e)) {
                         log.warn("Stream attempt {} for '{}' failed before first chunk ({}); failing over",
                                 index, plan.requestedModel(), e.toString());
-                        return streamAttempt(plan, index + 1, requestFor);
+                        return streamAttempt(plan, index + 1, Set.of(), requestFor);
                     }
-                    return Flux.error(emitted.get() ? e : exhausted(plan, e));
+                    return Flux.error(emitted.get() ? e : exhausted(plan, tried, e));
                 });
+    }
+
+    private static ProviderRegistry.Attempt untried(ProviderRegistry.Attempt attempt, Set<String> tried) {
+        if (tried.isEmpty()) {
+            return attempt;
+        }
+        List<LLMProvider> remaining = attempt.candidates().stream()
+                .filter(p -> !tried.contains(p.name()))
+                .toList();
+        return new ProviderRegistry.Attempt(attempt.poolKey(), remaining, attempt.model(), attempt.strategy());
+    }
+
+    private static Set<String> with(Set<String> tried, String name) {
+        Set<String> next = new HashSet<>(tried);
+        next.add(name);
+        return Set.copyOf(next);
     }
 
     /**
@@ -106,8 +140,8 @@ public class RequestRouter {
      * "we have nowhere to send this" differs from "the provider answered badly".
      * A single-provider plan keeps its original error.
      */
-    private static Throwable exhausted(ProviderRegistry.RoutePlan plan, Throwable last) {
-        if (plan.attempts().size() > 1 && isFailoverable(last)) {
+    private static Throwable exhausted(ProviderRegistry.RoutePlan plan, Set<String> tried, Throwable last) {
+        if ((plan.attempts().size() > 1 || !tried.isEmpty()) && isFailoverable(last)) {
             return new NoAvailableProviderException(plan.requestedModel(), last);
         }
         return last;

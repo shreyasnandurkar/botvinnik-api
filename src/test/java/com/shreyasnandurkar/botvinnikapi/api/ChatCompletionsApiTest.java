@@ -3,6 +3,8 @@ package com.shreyasnandurkar.botvinnikapi.api;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.shreyasnandurkar.botvinnikapi.TestcontainersConfiguration;
+import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
+import com.shreyasnandurkar.botvinnikapi.core.routing.ModelCatalog;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,6 +21,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import java.util.List;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,6 +40,12 @@ class ChatCompletionsApiTest {
 
     @Autowired
     WebTestClient client;
+
+    @Autowired
+    ConfigSnapshotService snapshots;
+
+    @Autowired
+    ModelCatalog catalog;
 
     @BeforeAll
     static void startServer() {
@@ -295,7 +304,20 @@ class ChatCompletionsApiTest {
     }
 
     @Test
-    void unknownProviderPrefixIs404ModelNotFound() {
+    void modelNoDiscoveredProviderServesIs404ModelNotFound() {
+        // Every provider answers discovery and none lists the model; later tests' qwen3:1.7b stays routable.
+        wiremock.stubFor(get(urlEqualTo("/api/tags")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                        {"models":[{"name":"qwen3:1.7b"}]}
+                        """)));
+        wiremock.stubFor(get(urlEqualTo("/v1beta/models")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                        {"models":[{"name":"models/gemini-2.0-flash","supportedGenerationMethods":["generateContent"]}]}
+                        """)));
+        catalog.refresh(snapshots.registry().all()).block();
+
         client.post().uri("/v1/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("""

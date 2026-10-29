@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.SequencedMap;
+import java.util.Set;
 import java.util.function.Function;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -115,6 +116,51 @@ class RoutingFailoverTest {
 
     private static void stubChatFailing(WireMockServer server) {
         server.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse().withStatus(500)));
+    }
+
+    @Test
+    void retriesAnotherCandidateInTheSameAttempt() {
+        stubChatFailing(primary);
+        stubChatOk(backup, "served by backup");
+        // Bare name both providers serve: one attempt, two candidates, no alias fallback chain.
+        ProviderRegistry.RoutePlan plan = registry.resolveRoute("m", name -> Set.of("m"));
+        assertThat(plan.attempts()).hasSize(1);
+
+        for (int i = 0; i < 6; i++) {
+            ChatResponse resp = router.chat(plan, requestFor()).block(BLOCK);
+            assertThat(resp.content()).isEqualTo("served by backup");
+        }
+        primary.verify(com.github.tomakehurst.wiremock.client.WireMock.moreThanOrExactly(1),
+                postRequestedFor(urlEqualTo("/api/chat")));
+    }
+
+    @Test
+    void streamRetriesAnotherCandidateBeforeFirstChunk() {
+        stubChatFailing(primary);
+        backup.stubFor(post(urlEqualTo("/api/chat")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/x-ndjson")
+                .withBody("""
+                        {"model":"m","message":{"role":"assistant","content":"Hello"},"done":false}
+                        {"model":"m","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}
+                        """)));
+        ProviderRegistry.RoutePlan plan = registry.resolveRoute("m", name -> Set.of("m"));
+
+        for (int i = 0; i < 6; i++) {
+            List<ChatChunk> chunks = router.stream(plan, requestFor()).collectList().block(BLOCK);
+            assertThat(chunks.getFirst().contentDelta()).isEqualTo("Hello");
+        }
+        primary.verify(com.github.tomakehurst.wiremock.client.WireMock.moreThanOrExactly(1),
+                postRequestedFor(urlEqualTo("/api/chat")));
+    }
+
+    @Test
+    void allCandidatesFailingYields503() {
+        stubChatFailing(primary);
+        stubChatFailing(backup);
+        ProviderRegistry.RoutePlan plan = registry.resolveRoute("m", name -> Set.of("m"));
+
+        assertThatThrownBy(() -> router.chat(plan, requestFor()).block(BLOCK))
+                .isInstanceOf(NoAvailableProviderException.class);
     }
 
     @Test

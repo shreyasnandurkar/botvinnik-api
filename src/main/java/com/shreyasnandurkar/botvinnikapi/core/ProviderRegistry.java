@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.SequencedMap;
+import java.util.Set;
 
 /**
  * One immutable snapshot of routing config: provider instances, the alias
@@ -52,6 +53,14 @@ public class ProviderRegistry {
     public record Attempt(String poolKey, List<LLMProvider> candidates, String model, String strategy) {
     }
 
+    /** Models each provider serves; null means not yet discovered. */
+    @FunctionalInterface
+    public interface ModelIndex {
+        ModelIndex NONE = providerName -> null;
+
+        Set<String> modelsOf(String providerName);
+    }
+
     public record RoutePlan(String requestedModel, List<Attempt> attempts) {
 
         public Attempt primary() {
@@ -63,15 +72,21 @@ public class ProviderRegistry {
         return List.copyOf(providers.values());
     }
 
+    public RoutePlan resolveRoute(String model) {
+        return resolveRoute(model, ModelIndex.NONE);
+    }
+
     /**
      * Resolution rules, in order:
      * <ul>
      *   <li>alias — primary plus its fallback chain, each widened to its pool;</li>
-     *   <li>"provider/model" — pinned to exactly that instance, no widening;</li>
-     *   <li>bare "model" — the first configured provider, widened to its pool.</li>
+     *   <li>"provider/model" — pinned to exactly that instance, only if the prefix is a
+     *       registered provider (model ids like "openai/gpt-oss-20b" contain slashes too);</li>
+     *   <li>bare "model" — every provider whose discovered models include it; if none does
+     *       and some provider is still undiscovered, the first configured provider.</li>
      * </ul>
      */
-    public RoutePlan resolveRoute(String model) {
+    public RoutePlan resolveRoute(String model, ModelIndex index) {
         AliasRoute route = aliases.get(model);
         if (route != null) {
             List<Attempt> attempts = new ArrayList<>();
@@ -95,13 +110,29 @@ public class ProviderRegistry {
         if (slash > 0) {
             String providerName = model.substring(0, slash);
             LLMProvider provider = providers.get(providerName);
-            if (provider == null) {
-                throw new UnknownModelException(model);
+            if (provider != null) {
+                return new RoutePlan(model, List.of(new Attempt(
+                        providerName, List.of(provider), model.substring(slash + 1), "least_conn")));
             }
-            return new RoutePlan(model, List.of(new Attempt(
-                    providerName, List.of(provider), model.substring(slash + 1), "least_conn")));
         }
         if (providers.isEmpty()) {
+            throw new UnknownModelException(model);
+        }
+        List<LLMProvider> serving = new ArrayList<>();
+        boolean undiscovered = false;
+        for (Map.Entry<String, LLMProvider> e : providers.entrySet()) {
+            Set<String> models = index.modelsOf(e.getKey());
+            if (models == null) {
+                undiscovered = true;
+            } else if (models.contains(model)) {
+                serving.add(e.getValue());
+            }
+        }
+        if (!serving.isEmpty()) {
+            return new RoutePlan(model, List.of(new Attempt("model:" + model, serving, model, "least_conn")));
+        }
+        // Every provider answered and none has it: fail here rather than send it somewhere that will 404.
+        if (!undiscovered) {
             throw new UnknownModelException(model);
         }
         Attempt attempt = widen(providers.firstEntry().getKey(), model);

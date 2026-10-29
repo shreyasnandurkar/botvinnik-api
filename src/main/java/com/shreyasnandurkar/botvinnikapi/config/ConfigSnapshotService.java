@@ -11,6 +11,7 @@ import com.shreyasnandurkar.botvinnikapi.control.db.ProviderRepository;
 import com.shreyasnandurkar.botvinnikapi.core.LLMProvider;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderFactory;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
+import com.shreyasnandurkar.botvinnikapi.core.routing.ModelCatalog;
 import com.shreyasnandurkar.botvinnikapi.security.KeyCrypto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,13 +45,15 @@ public class ConfigSnapshotService {
     private final ProviderFactory factory;
     private final KeyCrypto crypto;
     private final ObjectMapper mapper;
+    private final ModelCatalog catalog;
     private final AtomicReference<ProviderRegistry> snapshot = new AtomicReference<>(ProviderRegistry.empty());
     private final AtomicReference<Map<String, ApiKeyEntity>> apiKeysByHash = new AtomicReference<>(Map.of());
     private final AtomicReference<Map<String, UUID>> providerIdsByName = new AtomicReference<>(Map.of());
 
     public ConfigSnapshotService(ProviderRepository providerRepository, AliasRepository aliasRepository,
                                  PoolRepository poolRepository, ApiKeyRepository apiKeyRepository,
-                                 ProviderFactory factory, KeyCrypto crypto, ObjectMapper mapper) {
+                                 ProviderFactory factory, KeyCrypto crypto, ObjectMapper mapper,
+                                 ModelCatalog catalog) {
         this.providerRepository = providerRepository;
         this.aliasRepository = aliasRepository;
         this.poolRepository = poolRepository;
@@ -58,6 +61,7 @@ public class ConfigSnapshotService {
         this.factory = factory;
         this.crypto = crypto;
         this.mapper = mapper;
+        this.catalog = catalog;
     }
 
     public ProviderRegistry registry() {
@@ -79,7 +83,10 @@ public class ConfigSnapshotService {
                         poolRepository.findAll().collectList(),
                         apiKeyRepository.findAll().collectList())
                 .doOnNext(t -> {
-                    snapshot.set(build(t.getT1(), t.getT2(), t.getT3()));
+                    ProviderRegistry registry = build(t.getT1(), t.getT2(), t.getT3());
+                    snapshot.set(registry);
+                    // Fire-and-forget: discovery must not hold up the admin write that triggered it.
+                    catalog.refresh(registry.all()).subscribe();
                     Map<String, ApiKeyEntity> keys = new HashMap<>();
                     t.getT4().forEach(k -> keys.put(k.keyHash(), k));
                     apiKeysByHash.set(keys);

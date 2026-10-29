@@ -7,6 +7,7 @@ import com.shreyasnandurkar.botvinnikapi.config.GatewayProperties;
 import com.shreyasnandurkar.botvinnikapi.control.db.ApiKeyEntity;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
 import com.shreyasnandurkar.botvinnikapi.core.error.InvalidRequestException;
+import com.shreyasnandurkar.botvinnikapi.core.routing.ModelCatalog;
 import com.shreyasnandurkar.botvinnikapi.core.routing.RequestRouter;
 import com.shreyasnandurkar.botvinnikapi.security.ApiKeyAuthFilter;
 import org.springframework.http.MediaType;
@@ -28,10 +29,13 @@ public class ChatCompletionsController {
     private final RequestRouter router;
     private final OpenAiSseEncoder sseEncoder;
     private final GatewayProperties properties;
+    private final ModelCatalog catalog;
 
     public ChatCompletionsController(ConfigSnapshotService snapshots, RequestRouter router,
-                                     OpenAiSseEncoder sseEncoder, GatewayProperties properties) {
+                                     OpenAiSseEncoder sseEncoder, GatewayProperties properties,
+                                     ModelCatalog catalog) {
         this.snapshots = snapshots;
+        this.catalog = catalog;
         this.router = router;
         this.sseEncoder = sseEncoder;
         this.properties = properties;
@@ -43,7 +47,7 @@ public class ChatCompletionsController {
         body.validate();
         enforceLimits(body, exchange.getAttribute(ApiKeyAuthFilter.KEY_ATTR));
         // Snapshot read only — the hot path never touches the DB (§4).
-        ProviderRegistry.RoutePlan plan = snapshots.registry().resolveRoute(body.model);
+        ProviderRegistry.RoutePlan plan = snapshots.registry().resolveRoute(body.model, catalog);
 
         if (Boolean.TRUE.equals(body.stream)) {
             Flux<String> frames = sseEncoder.encode(
