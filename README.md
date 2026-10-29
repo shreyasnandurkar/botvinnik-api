@@ -27,14 +27,14 @@ client.chat.completions.create(
 
 That `model="assistant"` is the core trick: it's an **alias** the operator maps to `office-gpu/qwen3:4b` with a fallback chain to `google/gemini-2.5-flash`. Migrate every client from a local model to a cloud one (or back) with a single `PATCH` — no code changes, no redeploys.
 
-> **Protocol vs. providers:** OpenAI is the *client-facing protocol* — the de-facto standard every AI tool already speaks. Behind it, the gateway talks to each provider in its **native** wire format. Two provider families are supported today, **Ollama** (NDJSON streaming) and **Gemini** (SSE), and the adapter interface makes each additional one a single class — an OpenAI-compatible adapter would also unlock Groq, OpenRouter, vLLM, and every other API that clones that wire format.
+> **Protocol vs. providers:** OpenAI is the *client-facing protocol* — the de-facto standard every AI tool already speaks. Behind it, the gateway talks to each provider in its **native** wire format. Three provider families are supported today: **Ollama** (NDJSON streaming), **Gemini** (SSE), and **OpenAI-compatible** (SSE), which covers OpenAI itself plus vLLM, llama.cpp, LM Studio, Groq, OpenRouter, and every other API that clones that wire format. The adapter interface makes each additional family a single class.
 
 ## What it does
 
 | | |
 |---|---|
 | **OpenAI-compatible data plane** | `/v1/chat/completions` (streaming + non-streaming) and `/v1/models`, with tool calls, `reasoning_content`, and SSE framing that terminates in `[DONE]` |
-| **Native provider adapters** | Ollama (NDJSON) and Gemini (SSE) — each speaks its provider's real wire format, and chunk shapes are normalized into one universal stream |
+| **Native provider adapters** | Ollama (NDJSON), Gemini (SSE) and OpenAI-compatible (SSE) — each speaks its provider's real wire format, and chunk shapes are normalized into one universal stream |
 | **Pools + load balancing** | P2C (power-of-two-choices), least-connections, or round-robin across identical backends, keyed on **live in-flight depth**, not request counts |
 | **Circuit breakers + failover** | Connect-time failures walk the alias fallback chain; a dead provider is short-circuited after 4 failures and probed back to life automatically |
 | **TTFT-based health** | Providers are `HEALTHY / DEGRADED / OPEN / DOWN` from a dual-rate moving average of time-to-first-token — degradation is detected *before* hard failure |
@@ -109,7 +109,7 @@ flowchart LR
 | **Database** | PostgreSQL · Spring Data R2DBC · Flyway |
 | **Resilience** | Resilience4j · Bucket4j |
 | **Crypto** | JDK `MessageDigest` (SHA-256) · `javax.crypto` (AES-GCM-256) |
-| **Providers** | Ollama · Google Gemini — native HTTP, no vendor SDKs |
+| **Providers** | Ollama · Google Gemini · any OpenAI-compatible API — native HTTP, no vendor SDKs |
 | **Dashboard** | Plain HTML/CSS/JS |
 | **Testing** | JUnit 5 · WebTestClient · WireMock · Testcontainers |
 | **Tooling** | DevTools · Docker |

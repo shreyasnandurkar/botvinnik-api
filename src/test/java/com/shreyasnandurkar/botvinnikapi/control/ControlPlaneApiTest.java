@@ -123,7 +123,7 @@ class ControlPlaneApiTest {
         client.post().uri("/v1/providers")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("""
-                        {"name":"mystery","type":"openai","base_url":"http://x"}
+                        {"name":"mystery","type":"not-a-provider","base_url":"http://x"}
                         """)
                 .exchange()
                 .expectStatus().isBadRequest()

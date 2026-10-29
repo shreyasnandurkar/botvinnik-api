@@ -2,6 +2,7 @@ package com.shreyasnandurkar.botvinnikapi.core;
 
 import com.shreyasnandurkar.botvinnikapi.providers.gemini.GeminiProvider;
 import com.shreyasnandurkar.botvinnikapi.providers.ollama.OllamaProvider;
+import com.shreyasnandurkar.botvinnikapi.providers.openai.OpenAiCompatProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import tools.jackson.databind.ObjectMapper;
@@ -16,7 +17,7 @@ import java.util.Set;
 @Component
 public class ProviderFactory {
 
-    public static final Set<String> SUPPORTED_TYPES = Set.of("ollama", "gemini");
+    public static final Set<String> SUPPORTED_TYPES = Set.of("ollama", "gemini", "openai");
 
     private final WebClient.Builder webClientBuilder;
     private final ObjectMapper objectMapper;
@@ -36,6 +37,14 @@ public class ProviderFactory {
                     throw new IllegalStateException("Provider '" + name + "' (gemini) requires an api-key");
                 }
                 yield new GeminiProvider(name, baseUrl, apiKey, webClientBuilder, objectMapper,
+                        streamIdleTimeout);
+            }
+            case "openai" -> {
+                if ((baseUrl == null || baseUrl.isBlank()) && (apiKey == null || apiKey.isBlank())) {
+                    throw new IllegalStateException(
+                            "Provider '" + name + "' (openai) requires a base-url or an api-key");
+                }
+                yield new OpenAiCompatProvider(name, baseUrl, apiKey, webClientBuilder, objectMapper,
                         streamIdleTimeout);
             }
             default -> throw new IllegalStateException(

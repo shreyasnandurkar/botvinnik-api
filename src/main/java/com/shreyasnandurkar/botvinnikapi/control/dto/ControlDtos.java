@@ -43,6 +43,12 @@ public final class ControlDtos {
             if (type.equals("gemini") && (apiKey == null || apiKey.isBlank())) {
                 throw new InvalidRequestException("'api_key' is required for type gemini.", "api_key");
             }
+            // No base_url means api.openai.com, which needs a key; local servers need only the URL.
+            if (type.equals("openai") && (baseUrl == null || baseUrl.isBlank())
+                    && (apiKey == null || apiKey.isBlank())) {
+                throw new InvalidRequestException(
+                        "'base_url' or 'api_key' is required for type openai.", "base_url");
+            }
             if (streamIdleTimeoutMs != null && streamIdleTimeoutMs <= 0) {
                 throw new InvalidRequestException(
                         "'stream_idle_timeout_ms' must be positive.", "stream_idle_timeout_ms");
