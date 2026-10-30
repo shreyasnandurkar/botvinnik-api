@@ -27,14 +27,15 @@ public class GatewayExceptionHandler {
     @ExceptionHandler(GatewayException.class)
     public ResponseEntity<Object> gateway(GatewayException e, ServerWebExchange exchange) {
         return ResponseEntity.status(e.status())
-                .body(protocolOf(exchange).encodeError(e.getMessage(), e.type(), e.param(), e.code()));
+                .body(protocolOf(exchange).encodeError(
+                        e.status().value(), e.getMessage(), e.type(), e.param(), e.code()));
     }
 
     /** Malformed JSON / undeserializable body. */
     @ExceptionHandler(ServerWebInputException.class)
     public ResponseEntity<Object> badInput(ServerWebInputException e, ServerWebExchange exchange) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(protocolOf(exchange).encodeError(
+                .body(protocolOf(exchange).encodeError(400,
                         "Could not parse the request body as JSON.", "invalid_request_error", null, null));
     }
 
@@ -42,7 +43,7 @@ public class GatewayExceptionHandler {
     public ResponseEntity<Object> unexpected(Throwable e, ServerWebExchange exchange) {
         log.error("Unexpected error handling request", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(protocolOf(exchange).encodeError(
+                .body(protocolOf(exchange).encodeError(500,
                         "Internal gateway error.", "api_error", null, "internal_error"));
     }
 

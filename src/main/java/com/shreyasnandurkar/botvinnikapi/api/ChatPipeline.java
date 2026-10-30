@@ -43,7 +43,7 @@ public class ChatPipeline {
         ProviderRegistry.RoutePlan plan = snapshots.registry().resolveRoute(inbound.model(), catalog);
 
         if (inbound.stream()) {
-            Flux<String> frames = protocol.encodeStream(
+            Flux<?> frames = protocol.encodeStream(
                     router.stream(plan, forModel), body, plan.primary().model());
             return Mono.just(ResponseEntity.ok()
                     .contentType(MediaType.TEXT_EVENT_STREAM)

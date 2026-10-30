@@ -23,10 +23,10 @@ public interface ClientProtocol<B> {
 
     Object encodeResponse(ChatResponse response);
 
-    /** Payloads for an SSE response, including the protocol's in-band error and terminator. */
-    Flux<String> encodeStream(Flux<ChatChunk> chunks, B body, String model);
+    /** SSE elements (payload strings or ServerSentEvents), including the protocol's in-band error and ending. */
+    Flux<?> encodeStream(Flux<ChatChunk> chunks, B body, String model);
 
-    Object encodeError(String message, String type, String param, String code);
+    Object encodeError(int status, String message, String type, String param, String code);
 
     /**
      * @param forModel builds the ChatRequest once routing has resolved the backend model name

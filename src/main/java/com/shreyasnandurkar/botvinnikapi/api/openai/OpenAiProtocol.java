@@ -43,7 +43,7 @@ public class OpenAiProtocol implements ClientProtocol<OpenAiChatCompletionReques
     }
 
     @Override
-    public Object encodeError(String message, String type, String param, String code) {
+    public Object encodeError(int status, String message, String type, String param, String code) {
         return new OpenAiDtos.ErrorBody(new OpenAiDtos.ErrorDetail(message, type, param, code));
     }
 }

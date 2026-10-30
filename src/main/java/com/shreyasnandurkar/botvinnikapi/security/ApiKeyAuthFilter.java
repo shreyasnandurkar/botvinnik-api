@@ -34,7 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ApiKeyAuthFilter implements WebFilter {
 
     public static final String KEY_ATTR = "botvinnik.apiKey";
-    private static final Set<String> DATA_PLANE = Set.of("/v1/chat/completions", "/v1/models");
+    private static final Set<String> DATA_PLANE = Set.of("/v1/chat/completions", "/v1/messages", "/v1/models");
     private static final long TOUCH_INTERVAL_MS = 60_000;
 
     private final GatewayProperties properties;
@@ -62,13 +62,13 @@ public class ApiKeyAuthFilter implements WebFilter {
                 || !DATA_PLANE.contains(exchange.getRequest().getPath().value())) {
             return chain.filter(exchange);
         }
-        String header = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        if (header == null || !header.startsWith("Bearer ")) {
+        String presented = presentedKey(exchange);
+        if (presented == null) {
             return reject(exchange, HttpStatus.UNAUTHORIZED,
-                    "Missing API key. Pass it as 'Authorization: Bearer sk_live_...'.",
+                    "Missing API key. Pass it as 'Authorization: Bearer sk_live_...' or 'x-api-key: sk_live_...'.",
                     "invalid_request_error", "missing_api_key", null);
         }
-        ApiKeyEntity key = snapshots.apiKeyByHash(Sha256.hex(header.substring("Bearer ".length()).trim()));
+        ApiKeyEntity key = snapshots.apiKeyByHash(Sha256.hex(presented));
         if (key == null) {
             return reject(exchange, HttpStatus.UNAUTHORIZED, "Invalid API key.",
                     "invalid_request_error", "invalid_api_key", null);
@@ -83,6 +83,16 @@ public class ApiKeyAuthFilter implements WebFilter {
         return chain.filter(exchange)
                 .contextWrite(ctx -> ctx.put(TelemetryContext.class,
                         new TelemetryContext(key.id(), key.logContent())));
+    }
+
+    /** OpenAI clients send a bearer token; Anthropic SDKs send x-api-key. */
+    private static String presentedKey(ServerWebExchange exchange) {
+        String bearer = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+        if (bearer != null && bearer.startsWith("Bearer ") && !bearer.substring(7).isBlank()) {
+            return bearer.substring(7).trim();
+        }
+        String apiKey = exchange.getRequest().getHeaders().getFirst("x-api-key");
+        return apiKey == null || apiKey.isBlank() ? null : apiKey.trim();
     }
 
     /** Fire-and-forget, at most once a minute per key — not a write per request. */
@@ -104,7 +114,7 @@ public class ApiKeyAuthFilter implements WebFilter {
             exchange.getResponse().getHeaders().set(HttpHeaders.RETRY_AFTER, retryAfterSeconds);
         }
         byte[] body = mapper.writeValueAsBytes(protocols.forPath(exchange.getRequest().getPath().value())
-                .encodeError(message, type, null, code));
+                .encodeError(status.value(), message, type, null, code));
         DataBuffer buffer = exchange.getResponse().bufferFactory().wrap(body);
         return exchange.getResponse().writeWith(Mono.just(buffer));
     }

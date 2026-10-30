@@ -147,6 +147,29 @@ class AuthApiTest {
     }
 
     @Test
+    void anthropicClientsAuthenticateWithXApiKey() {
+        String key = mintKey(Map.of());
+
+        client.post().uri("/v1/messages").contentType(MediaType.APPLICATION_JSON)
+                .header("x-api-key", key)
+                .bodyValue(Map.of("model", "auth-ollama/paid-model", "max_tokens", 32,
+                        "messages", java.util.List.of(Map.of("role", "user", "content", "hi"))))
+                .exchange().expectStatus().isOk()
+                .expectBody().jsonPath("$.content[0].text").isEqualTo("hello");
+    }
+
+    @Test
+    void missingKeyOnMessagesIsAnthropicShaped() {
+        client.post().uri("/v1/messages").contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("model", "auth-ollama/paid-model", "max_tokens", 32,
+                        "messages", java.util.List.of(Map.of("role", "user", "content", "hi"))))
+                .exchange().expectStatus().isUnauthorized()
+                .expectBody()
+                .jsonPath("$.type").isEqualTo("error")
+                .jsonPath("$.error.type").isEqualTo("authentication_error");
+    }
+
+    @Test
     void deletedKeyStopsWorking() {
         String key = mintKey(Map.of());
         byte[] listing = client.get().uri("/v1/apikeys").exchange()
@@ -222,11 +245,15 @@ class AuthApiTest {
     @Test
     void requestsLandInLogsAndUsage() throws InterruptedException {
         String key = mintKey(Map.of("log_content", true));
+        byte[] listing = client.get().uri("/v1/apikeys").exchange()
+                .expectBody().returnResult().getResponseBody();
+        String keyId = mapper.readTree(listing).get(0).path("id").asString();
         chat(key).expectStatus().isOk();
 
         // The sink drains on a 1s cadence (§13) — poll rather than sleep-and-pray.
+        // Filtered by key: rows from earlier tests in this class can still be draining.
         for (int i = 0; i < 30; i++) {
-            byte[] logs = client.get().uri("/v1/logs?provider=auth-ollama&outcome=success")
+            byte[] logs = client.get().uri("/v1/logs?provider=auth-ollama&outcome=success&api_key_id=" + keyId)
                     .exchange().expectStatus().isOk()
                     .expectBody().returnResult().getResponseBody();
             JsonNode rows = mapper.readTree(logs);
