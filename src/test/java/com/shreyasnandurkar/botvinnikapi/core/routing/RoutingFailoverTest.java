@@ -9,6 +9,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.providers.ollama.OllamaProvider;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -236,5 +238,22 @@ class RoutingFailoverTest {
 
         assertThatThrownBy(() -> router.chat(plan, requestFor()).block(BLOCK))
                 .isInstanceOf(UpstreamException.class);
+    }
+
+    @Test
+    void embeddingsFailOverAlongTheAliasChain() {
+        primary.stubFor(post(urlEqualTo("/api/embed")).willReturn(aResponse().withStatus(500)));
+        backup.stubFor(post(urlEqualTo("/api/embed")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                        {"model":"m","embeddings":[[0.5]],"prompt_eval_count":1}
+                        """)));
+        ProviderRegistry.RoutePlan plan = registry.resolveRoute("assistant", name -> Set.of("m"));
+
+        EmbeddingResponse resp = router.embed(plan,
+                model -> new EmbeddingRequest(model, List.of("hi"), null)).block(BLOCK);
+
+        assertThat(resp.provider()).isEqualTo("backup");
+        assertThat(resp.embeddings().getFirst()).containsExactly(0.5f);
     }
 }

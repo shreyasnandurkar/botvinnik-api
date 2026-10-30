@@ -7,6 +7,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.HealthStatus;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
@@ -24,6 +26,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
 
@@ -172,6 +175,29 @@ public class OpenAiCompatProvider implements LLMProvider {
         state.finished = true;
         return List.of(new ChatChunk(null, null, null,
                 normalizeFinishReason(state.finishReason, state.hasToolCalls), state.usage));
+    }
+
+    @Override
+    public Mono<EmbeddingResponse> embed(EmbeddingRequest request) {
+        return client.post()
+                .uri("/embeddings")
+                .bodyValue(new OpenAiApi.EmbeddingsRequest(request.model(), request.input(),
+                        request.dimensions(), "float"))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, resp -> resp.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
+                .bodyToMono(OpenAiApi.EmbeddingsResponse.class)
+                .map(resp -> new EmbeddingResponse(
+                        // data is documented as ordered, but index is the contract.
+                        resp.data() == null ? List.of() : resp.data().stream()
+                                .sorted(Comparator.comparing(d -> d.index() == null ? 0 : d.index()))
+                                .map(OpenAiApi.EmbeddingObj::embedding)
+                                .toList(),
+                        resp.usage() == null || resp.usage().promptTokens() == null ? null
+                                : new TokenUsage(resp.usage().promptTokens(), 0),
+                        name, resp.model() == null ? request.model() : resp.model()))
+                .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
     }
 
     @Override

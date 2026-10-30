@@ -72,4 +72,17 @@ final class OllamaApi {
     @JsonIgnoreProperties(ignoreUnknown = true)
     record Tag(String name) {
     }
+
+    // ── embeddings (/api/embed) ─────────────────────────────────────────────
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record EmbedRequest(String model, List<String> input, Integer dimensions) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record EmbedResponse(
+            String model,
+            List<float[]> embeddings,
+            @JsonProperty("prompt_eval_count") Integer promptEvalCount) {
+    }
 }

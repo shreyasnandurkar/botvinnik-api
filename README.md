@@ -36,6 +36,7 @@ That `model="assistant"` is the core trick: it's an **alias** the operator maps 
 | **OpenAI-compatible data plane** | `/v1/chat/completions` (streaming + non-streaming) and `/v1/models`, with tool calls, `reasoning_content`, and SSE framing that terminates in `[DONE]` |
 | **Anthropic-compatible data plane** | `/v1/messages` for Claude Code and the Anthropic SDKs: content blocks, tool use, thinking, and the named SSE event sequence — served by any backend |
 | **OpenAI Responses data plane** | `/v1/responses` for the OpenAI Agents SDK and newer OpenAI tooling: input items, function calls, reasoning, and the `response.*` event stream — stateless, so `previous_response_id` is rejected and clients send the full conversation |
+| **Embeddings** | `/v1/embeddings` in OpenAI's shape (float or base64), served by Ollama, OpenAI-compatible and Gemini backends through the same routing, failover and logging as chat |
 | **Native provider adapters** | Ollama (NDJSON), Gemini (SSE), Anthropic (named SSE events) and OpenAI-compatible (SSE) — each speaks its provider's real wire format, and chunk shapes are normalized into one universal stream |
 | **Pools + load balancing** | P2C (power-of-two-choices), least-connections, or round-robin across identical backends, keyed on **live in-flight depth**, not request counts |
 | **Circuit breakers + failover** | Connect-time failures walk the alias fallback chain; a dead provider is short-circuited after 4 failures and probed back to life automatically |
@@ -207,6 +208,7 @@ Dashboard: open **http://localhost:4000/dashboard** — provider health with TTF
 POST /v1/chat/completions        OpenAI protocol, stream: true | false
 POST /v1/messages                Anthropic protocol, stream: true | false
 POST /v1/responses               OpenAI Responses protocol (stateless), stream: true | false
+POST /v1/embeddings              OpenAI embeddings, encoding_format: float | base64
 GET  /v1/models                  union of models across providers
 ```
 

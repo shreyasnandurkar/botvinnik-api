@@ -3,9 +3,14 @@ package com.shreyasnandurkar.botvinnikapi.api.openai;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
@@ -119,6 +124,37 @@ public final class OpenAiDtos {
             String object,
             long created,
             @JsonProperty("owned_by") String ownedBy) {
+    }
+
+    // ── embeddings ──────────────────────────────────────────────────────────
+
+    public record EmbeddingList(String object, List<EmbeddingData> data, String model, EmbeddingUsage usage) {
+
+        public static EmbeddingList from(EmbeddingResponse resp, boolean base64) {
+            List<EmbeddingData> data = new ArrayList<>(resp.embeddings().size());
+            for (int i = 0; i < resp.embeddings().size(); i++) {
+                float[] vector = resp.embeddings().get(i);
+                data.add(new EmbeddingData("embedding", i, base64 ? toBase64(vector) : vector));
+            }
+            int prompt = resp.usage() == null ? 0 : resp.usage().promptTokens();
+            return new EmbeddingList("list", data, resp.model(), new EmbeddingUsage(prompt, prompt));
+        }
+
+        /** OpenAI's base64 form: the vector's float32 values, little-endian, then base64. */
+        private static String toBase64(float[] vector) {
+            ByteBuffer bytes = ByteBuffer.allocate(vector.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+            bytes.asFloatBuffer().put(vector);
+            return Base64.getEncoder().encodeToString(bytes.array());
+        }
+    }
+
+    /** embedding is a float array, or a base64 string when the client asked for it. */
+    public record EmbeddingData(String object, int index, Object embedding) {
+    }
+
+    public record EmbeddingUsage(
+            @JsonProperty("prompt_tokens") int promptTokens,
+            @JsonProperty("total_tokens") int totalTokens) {
     }
 
     public record ErrorBody(ErrorDetail error) {

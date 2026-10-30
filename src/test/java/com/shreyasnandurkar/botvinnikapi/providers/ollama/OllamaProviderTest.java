@@ -7,6 +7,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -282,5 +284,25 @@ class OllamaProviderTest {
         assertThat(models).extracting("id")
                 .containsExactly("qwen3:1.7b", "deepseek-r1:1.5b");
         assertThat(models).allMatch(m -> m.provider().equals("test-ollama"));
+    }
+
+    @Test
+    void embedsThroughApiEmbed() {
+        wiremock.stubFor(post(urlEqualTo("/api/embed")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                        {"model":"nomic-embed-text","embeddings":[[0.1,0.2],[0.3,0.4]],"prompt_eval_count":6}
+                        """)));
+
+        EmbeddingResponse resp = provider.embed(
+                new EmbeddingRequest("nomic-embed-text", List.of("a", "b"), 2)).block();
+
+        assertThat(resp.embeddings()).hasSize(2);
+        assertThat(resp.embeddings().get(1)).containsExactly(0.3f, 0.4f);
+        assertThat(resp.usage().promptTokens()).isEqualTo(6);
+        assertThat(resp.provider()).isEqualTo("test-ollama");
+        wiremock.verify(postRequestedFor(urlEqualTo("/api/embed"))
+                .withRequestBody(matchingJsonPath("$.input[1]", equalTo("b")))
+                .withRequestBody(matchingJsonPath("$.dimensions", equalTo("2"))));
     }
 }

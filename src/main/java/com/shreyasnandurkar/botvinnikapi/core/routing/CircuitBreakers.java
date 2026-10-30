@@ -44,7 +44,9 @@ public class CircuitBreakers {
      */
     static boolean isInfrastructureFailure(Throwable e) {
         if (e instanceof UpstreamException upstream) {
-            return upstream.upstreamStatus() >= 500 || upstream.upstreamStatus() == 429;
+            // 501 is a missing capability (e.g. embeddings on a chat-only server), not an outage.
+            int status = upstream.upstreamStatus();
+            return (status >= 500 && status != 501) || status == 429;
         }
         if (e instanceof GatewayException) {
             return e instanceof ProviderUnreachableException || e instanceof StreamIdleTimeoutException;

@@ -7,6 +7,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.HealthStatus;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
@@ -150,6 +152,23 @@ public class OllamaProvider implements LLMProvider {
                             chunk.evalCount() == null ? 0 : chunk.evalCount())));
         }
         return out;
+    }
+
+    @Override
+    public Mono<EmbeddingResponse> embed(EmbeddingRequest request) {
+        return client.post()
+                .uri("/api/embed")
+                .bodyValue(new OllamaApi.EmbedRequest(request.model(), request.input(), request.dimensions()))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, resp -> resp.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
+                .bodyToMono(OllamaApi.EmbedResponse.class)
+                .map(resp -> new EmbeddingResponse(
+                        resp.embeddings() == null ? List.of() : resp.embeddings(),
+                        new TokenUsage(resp.promptEvalCount() == null ? 0 : resp.promptEvalCount(), 0),
+                        name, resp.model() == null ? request.model() : resp.model()))
+                .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
     }
 
     @Override

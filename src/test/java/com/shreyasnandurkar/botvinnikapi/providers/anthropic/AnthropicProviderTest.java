@@ -2,10 +2,12 @@ package com.shreyasnandurkar.botvinnikapi.providers.anthropic;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.shreyasnandurkar.botvinnikapi.core.error.InvalidRequestException;
 import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
 import com.shreyasnandurkar.botvinnikapi.core.model.ToolCall;
@@ -330,5 +332,13 @@ class AnthropicProviderTest {
         assertThat(models).allSatisfy(m -> assertThat(m.provider()).isEqualTo("test-anthropic"));
         wiremock.verify(getRequestedFor(urlEqualTo("/v1/models?limit=1000"))
                 .withHeader("x-api-key", equalTo("sk-ant-test")));
+    }
+
+    @Test
+    void embeddingsAreNotSupported() {
+        assertThatThrownBy(() -> provider.embed(new EmbeddingRequest("claude", List.of("a"), null)).block())
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("does not support embeddings");
+        assertThat(wiremock.getAllServeEvents()).isEmpty();
     }
 }

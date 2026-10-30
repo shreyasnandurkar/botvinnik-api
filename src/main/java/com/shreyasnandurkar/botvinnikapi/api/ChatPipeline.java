@@ -1,5 +1,7 @@
 package com.shreyasnandurkar.botvinnikapi.api;
 
+import com.shreyasnandurkar.botvinnikapi.api.openai.EmbeddingsRequest;
+import com.shreyasnandurkar.botvinnikapi.api.openai.OpenAiDtos;
 import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import com.shreyasnandurkar.botvinnikapi.config.GatewayProperties;
 import com.shreyasnandurkar.botvinnikapi.control.db.ApiKeyEntity;
@@ -18,7 +20,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.function.Function;
 
-/** Validate → limit → resolve → dispatch → encode, shared by every client protocol. */
+/** Validate → limit → resolve → dispatch → encode, shared by every client protocol and embeddings. */
 @Component
 public class ChatPipeline {
 
@@ -56,13 +58,20 @@ public class ChatPipeline {
                         .body(protocol.encodeResponse(resp)));
     }
 
+    /** Embeddings have one wire shape (OpenAI's) and never stream, so they skip the protocol layer. */
+    public Mono<ResponseEntity<?>> embed(EmbeddingsRequest body) {
+        body.validate();
+        checkPromptSize(body.promptChars(), "input");
+        ProviderRegistry.RoutePlan plan = snapshots.registry().resolveRoute(body.model, catalog);
+        return router.embed(plan, body::toEmbeddingRequest)
+                .map(resp -> ResponseEntity.ok()
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(OpenAiDtos.EmbeddingList.from(resp, body.base64())));
+    }
+
     /** §20 resource protection: reject oversized prompts, clamp max_tokens to the key's cap. */
     private Function<String, ChatRequest> enforceLimits(ClientProtocol.InboundChat inbound, ApiKeyEntity key) {
-        int maxPromptChars = properties.limits().maxPromptChars();
-        if (inbound.promptChars() > maxPromptChars) {
-            throw new InvalidRequestException(
-                    "Prompt exceeds the gateway limit of " + maxPromptChars + " characters.", "messages");
-        }
+        checkPromptSize(inbound.promptChars(), "messages");
         Integer cap = key == null ? null : key.maxTokensCap();
         if (cap == null) {
             return inbound.forModel();
@@ -72,5 +81,13 @@ public class ChatPipeline {
             Integer requested = request.maxTokens();
             return request.withMaxTokens(requested == null ? cap : Math.min(requested, cap));
         };
+    }
+
+    private void checkPromptSize(long promptChars, String param) {
+        int maxPromptChars = properties.limits().maxPromptChars();
+        if (promptChars > maxPromptChars) {
+            throw new InvalidRequestException(
+                    "Prompt exceeds the gateway limit of " + maxPromptChars + " characters.", param);
+        }
     }
 }

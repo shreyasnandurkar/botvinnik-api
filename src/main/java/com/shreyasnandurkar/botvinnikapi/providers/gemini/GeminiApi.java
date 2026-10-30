@@ -116,4 +116,22 @@ final class GeminiApi {
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ModelEntry(String name, List<String> supportedGenerationMethods) {
     }
+
+    // ── embeddings (:batchEmbedContents) ────────────────────────────────────
+
+    record BatchEmbedRequest(List<EmbedContentRequest> requests) {
+    }
+
+    /** model repeats per request and must carry the "models/" prefix. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record EmbedContentRequest(String model, Content content, Integer outputDimensionality) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record BatchEmbedResponse(List<ContentEmbedding> embeddings) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record ContentEmbedding(float[] values) {
+    }
 }

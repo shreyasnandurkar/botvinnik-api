@@ -6,6 +6,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.core.model.ToolCall;
 import org.junit.jupiter.api.AfterAll;
@@ -339,7 +341,7 @@ class GeminiProviderTest {
     }
 
     @Test
-    void listModelsFiltersToGenerateContentAndStripsPrefix() {
+    void listModelsKeepsChatAndEmbeddingModelsAndStripsPrefix() {
         wiremock.stubFor(get(urlPathEqualTo("/v1beta/models")).willReturn(aResponse()
                 .withHeader("Content-Type", "application/json")
                 .withBody("""
@@ -347,12 +349,36 @@ class GeminiProviderTest {
                           {"name":"models/gemini-2.0-flash",
                            "supportedGenerationMethods":["generateContent","countTokens"]},
                           {"name":"models/text-embedding-004",
-                           "supportedGenerationMethods":["embedContent"]}]}
+                           "supportedGenerationMethods":["embedContent"]},
+                          {"name":"models/imagen-4.0-generate-001",
+                           "supportedGenerationMethods":["predict"]}]}
                         """)));
 
         var models = provider.listModels().block();
 
-        assertThat(models).extracting("id").containsExactly("gemini-2.0-flash");
+        assertThat(models).extracting("id").containsExactly("gemini-2.0-flash", "text-embedding-004");
         assertThat(models.getFirst().provider()).isEqualTo("test-gemini");
+    }
+
+    @Test
+    void embedsThroughBatchEmbedContents() {
+        wiremock.stubFor(post(urlEqualTo("/v1beta/models/gemini-embedding-001:batchEmbedContents"))
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {"embeddings":[{"values":[0.1,0.2]},{"values":[0.3,0.4]}]}
+                                """)));
+
+        EmbeddingResponse resp = provider.embed(
+                new EmbeddingRequest("gemini-embedding-001", List.of("a", "b"), 768)).block();
+
+        assertThat(resp.embeddings()).hasSize(2);
+        assertThat(resp.embeddings().get(1)).containsExactly(0.3f, 0.4f);
+        assertThat(resp.usage()).isNull();
+        wiremock.verify(postRequestedFor(urlEqualTo("/v1beta/models/gemini-embedding-001:batchEmbedContents"))
+                .withHeader("x-goog-api-key", equalTo("AIza-test-key"))
+                .withRequestBody(matchingJsonPath("$.requests[1].model", equalTo("models/gemini-embedding-001")))
+                .withRequestBody(matchingJsonPath("$.requests[1].content.parts[0].text", equalTo("b")))
+                .withRequestBody(matchingJsonPath("$.requests[0].outputDimensionality", equalTo("768"))));
     }
 }

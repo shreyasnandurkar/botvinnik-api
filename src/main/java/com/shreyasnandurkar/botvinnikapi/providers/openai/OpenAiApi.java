@@ -92,4 +92,23 @@ final class OpenAiApi {
     @JsonIgnoreProperties(ignoreUnknown = true)
     record ModelObj(String id) {
     }
+
+    // ── embeddings (/embeddings) ────────────────────────────────────────────
+
+    /** encoding_format pinned to float: base64 is a client-side transport choice the gateway re-applies. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    record EmbeddingsRequest(
+            String model,
+            List<String> input,
+            Integer dimensions,
+            @JsonProperty("encoding_format") String encodingFormat) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record EmbeddingsResponse(String model, List<EmbeddingObj> data, Usage usage) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record EmbeddingObj(Integer index, float[] embedding) {
+    }
 }

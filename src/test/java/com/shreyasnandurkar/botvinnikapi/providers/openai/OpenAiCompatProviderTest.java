@@ -6,6 +6,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
 import com.shreyasnandurkar.botvinnikapi.core.model.ToolCall;
@@ -257,5 +259,28 @@ class OpenAiCompatProviderTest {
 
         assertThat(models).extracting(ModelInfo::id).containsExactly("llama-3.1-8b", "qwen3-4b");
         assertThat(models).allSatisfy(m -> assertThat(m.provider()).isEqualTo("test-openai"));
+    }
+
+    @Test
+    void embedsAndOrdersVectorsByIndex() {
+        wiremock.stubFor(post(urlEqualTo("/v1/embeddings")).willReturn(aResponse()
+                .withHeader("Content-Type", "application/json")
+                .withBody("""
+                        {"object":"list","model":"text-embedding-3-small",
+                         "data":[{"object":"embedding","index":1,"embedding":[0.3,0.4]},
+                                 {"object":"embedding","index":0,"embedding":[0.1,0.2]}],
+                         "usage":{"prompt_tokens":5,"total_tokens":5}}
+                        """)));
+
+        EmbeddingResponse resp = provider.embed(
+                new EmbeddingRequest("text-embedding-3-small", List.of("a", "b"), null)).block();
+
+        assertThat(resp.embeddings().get(0)).containsExactly(0.1f, 0.2f);
+        assertThat(resp.embeddings().get(1)).containsExactly(0.3f, 0.4f);
+        assertThat(resp.usage().promptTokens()).isEqualTo(5);
+        wiremock.verify(postRequestedFor(urlEqualTo("/v1/embeddings"))
+                .withHeader("Authorization", equalTo("Bearer sk-test"))
+                .withRequestBody(matchingJsonPath("$.encoding_format", equalTo("float")))
+                .withRequestBody(matchingJsonPath("$.input[0]", equalTo("a"))));
     }
 }

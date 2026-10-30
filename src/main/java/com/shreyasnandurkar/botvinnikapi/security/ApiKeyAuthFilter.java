@@ -34,7 +34,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ApiKeyAuthFilter implements WebFilter {
 
     public static final String KEY_ATTR = "botvinnik.apiKey";
-    private static final Set<String> DATA_PLANE = Set.of("/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/models");
+    private static final Set<String> DATA_PLANE = Set.of(
+            "/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/embeddings", "/v1/models");
     private static final long TOUCH_INTERVAL_MS = 60_000;
 
     private final GatewayProperties properties;

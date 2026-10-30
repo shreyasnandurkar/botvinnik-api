@@ -10,6 +10,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.core.model.TokenUsage;
 import com.shreyasnandurkar.botvinnikapi.telemetry.RequestLogEntry;
@@ -31,7 +33,9 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Dispatch with failover (§9/§10): walk the route plan's attempts at connect
@@ -58,9 +62,20 @@ public class RequestRouter {
     }
 
     public Mono<ChatResponse> chat(ProviderRegistry.RoutePlan plan, Function<String, ChatRequest> requestFor) {
-        return chatAttempt(plan, 0, Set.of(), requestFor)
-                .onErrorMap(CallNotPermittedException.class,
-                        e -> new NoAvailableProviderException(plan.requestedModel(), e));
+        return unary(plan, (provider, model) -> {
+            ChatRequest request = requestFor.apply(model);
+            return instrumented(provider, () -> provider.chat(request), true, model,
+                    lastUserMessage(request), ChatResponse::usage, ChatResponse::content);
+        });
+    }
+
+    public Mono<EmbeddingResponse> embed(ProviderRegistry.RoutePlan plan,
+                                         Function<String, EmbeddingRequest> requestFor) {
+        return unary(plan, (provider, model) -> {
+            EmbeddingRequest request = requestFor.apply(model);
+            return instrumented(provider, () -> provider.embed(request), false, model,
+                    request.input().getFirst(), EmbeddingResponse::usage, response -> null);
+        });
     }
 
     public Flux<ChatChunk> stream(ProviderRegistry.RoutePlan plan, Function<String, ChatRequest> requestFor) {
@@ -69,25 +84,32 @@ public class RequestRouter {
                         e -> new NoAvailableProviderException(plan.requestedModel(), e));
     }
 
+    /** Request/response calls (chat, embeddings) share one failover loop; only the call differs. */
+    private <R> Mono<R> unary(ProviderRegistry.RoutePlan plan, BiFunction<LLMProvider, String, Mono<R>> call) {
+        return unaryAttempt(plan, 0, Set.of(), call)
+                .onErrorMap(CallNotPermittedException.class,
+                        e -> new NoAvailableProviderException(plan.requestedModel(), e));
+    }
+
     /** @param tried providers of this attempt that already failed at connect, skipped on retry */
-    private Mono<ChatResponse> chatAttempt(ProviderRegistry.RoutePlan plan, int index, Set<String> tried,
-                                           Function<String, ChatRequest> requestFor) {
+    private <R> Mono<R> unaryAttempt(ProviderRegistry.RoutePlan plan, int index, Set<String> tried,
+                                     BiFunction<LLMProvider, String, Mono<R>> call) {
         ProviderRegistry.Attempt attempt = untried(plan.attempts().get(index), tried);
         AtomicReference<String> picked = new AtomicReference<>();
         return Mono.defer(() -> {
             LLMProvider provider = balancer.pick(attempt);
             picked.set(provider.name());
-            return instrumented(provider, requestFor.apply(attempt.model()));
+            return call.apply(provider, attempt.model());
         }).onErrorResume(e -> {
             if (isFailoverable(e) && attempt.candidates().size() > 1) {
                 log.warn("Provider '{}' for '{}' failed at connect ({}); retrying another candidate",
                         picked.get(), plan.requestedModel(), e.toString());
-                return chatAttempt(plan, index, with(tried, picked.get()), requestFor);
+                return unaryAttempt(plan, index, with(tried, picked.get()), call);
             }
             if (index + 1 < plan.attempts().size() && isFailoverable(e)) {
                 log.warn("Attempt {} for '{}' failed at connect ({}); failing over",
                         index, plan.requestedModel(), e.toString());
-                return chatAttempt(plan, index + 1, Set.of(), requestFor);
+                return unaryAttempt(plan, index + 1, Set.of(), call);
             }
             return Mono.error(exhausted(plan, tried, e));
         });
@@ -147,31 +169,39 @@ public class RequestRouter {
         return last;
     }
 
-    private Mono<ChatResponse> instrumented(LLMProvider provider, ChatRequest request) {
+    /**
+     * @param feedsTtft whether latency counts as time-to-first-token; embedding latency would
+     *                  skew the TTFT EWMA that marks a provider DEGRADED
+     */
+    private <R> Mono<R> instrumented(LLMProvider provider, Supplier<Mono<R>> call, boolean feedsTtft,
+                                     String model, String prompt, Function<R, TokenUsage> usageOf,
+                                     Function<R, String> contentOf) {
         ProviderStatsRegistry.ProviderStats providerStats = stats.of(provider.name());
         return Mono.deferContextual(ctx -> {
             TelemetryContext tele = ctx.getOrDefault(TelemetryContext.class, TelemetryContext.NONE);
             long start = System.nanoTime();
             providerStats.started();
             AtomicLong ttft = new AtomicLong(-1);
-            AtomicReference<ChatResponse> result = new AtomicReference<>();
+            AtomicReference<R> result = new AtomicReference<>();
             AtomicReference<Throwable> failure = new AtomicReference<>();
-            return provider.chat(request)
+            return call.get()
                     .transformDeferred(CircuitBreakerOperator.of(breakers.of(provider.name())))
                     .doOnNext(r -> {
-                        long millis = millisSince(start);
-                        providerStats.recordTtft(millis);
-                        ttft.set(millis);
+                        if (feedsTtft) {
+                            long millis = millisSince(start);
+                            providerStats.recordTtft(millis);
+                            ttft.set(millis);
+                        }
                         result.set(r);
                     })
                     .doOnError(failure::set)
                     .doFinally(signal -> {
                         providerStats.finished();
-                        ChatResponse response = result.get();
-                        telemetry.record(entry(tele, provider, request, signal,
+                        R response = result.get();
+                        telemetry.record(entry(tele, provider, model, prompt, signal,
                                 millisSince(start), ttft.get(), failure.get(), response == null,
-                                response == null ? null : response.usage(),
-                                response == null ? null : response.content()));
+                                response == null ? null : usageOf.apply(response),
+                                response == null ? null : contentOf.apply(response)));
                     });
         });
     }
@@ -205,14 +235,14 @@ public class RequestRouter {
                     .doOnError(failure::set)
                     .doFinally(signal -> {
                         providerStats.finished();
-                        telemetry.record(entry(tele, provider, request, signal,
-                                millisSince(start), ttft.get(), failure.get(), ttft.get() < 0,
+                        telemetry.record(entry(tele, provider, request.model(), lastUserMessage(request),
+                                signal, millisSince(start), ttft.get(), failure.get(), ttft.get() < 0,
                                 usage.get(), content == null ? null : content.toString()));
                     });
         });
     }
 
-    private RequestLogEntry entry(TelemetryContext tele, LLMProvider provider, ChatRequest request,
+    private RequestLogEntry entry(TelemetryContext tele, LLMProvider provider, String model, String prompt,
                                   SignalType signal, long latencyMs, long ttftMs, Throwable error,
                                   boolean nothingReceived, TokenUsage usage, String responseContent) {
         String outcome = switch (signal) {
@@ -225,12 +255,12 @@ public class RequestRouter {
         String errorCode = error == null ? null
                 : error instanceof GatewayException ge ? ge.code() : error.getClass().getSimpleName();
         return new RequestLogEntry(
-                tele.apiKeyId(), provider.name(), request.model(), Instant.now(),
+                tele.apiKeyId(), provider.name(), model, Instant.now(),
                 latencyMs, ttftMs < 0 ? null : ttftMs,
                 usage == null ? null : usage.promptTokens(),
                 usage == null ? null : usage.completionTokens(),
                 outcome, errorCode,
-                tele.logContent() ? excerpt(lastUserMessage(request)) : null,
+                tele.logContent() ? excerpt(prompt) : null,
                 tele.logContent() ? excerpt(responseContent) : null);
     }
 

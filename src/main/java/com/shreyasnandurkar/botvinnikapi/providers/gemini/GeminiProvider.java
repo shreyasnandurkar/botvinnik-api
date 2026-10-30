@@ -8,6 +8,8 @@ import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.model.HealthStatus;
 import com.shreyasnandurkar.botvinnikapi.core.model.Message;
 import com.shreyasnandurkar.botvinnikapi.core.model.ModelInfo;
@@ -162,6 +164,29 @@ public class GeminiProvider implements LLMProvider {
         return out;
     }
 
+    /** Gemini embeds one text per request; the batch endpoint takes them all in one call. Reports no token usage. */
+    @Override
+    public Mono<EmbeddingResponse> embed(EmbeddingRequest request) {
+        List<GeminiApi.EmbedContentRequest> requests = request.input().stream()
+                .map(text -> new GeminiApi.EmbedContentRequest("models/" + request.model(),
+                        new GeminiApi.Content(null, List.of(new GeminiApi.Part(text, null, null, null))),
+                        request.dimensions()))
+                .toList();
+        return client.post()
+                .uri("/v1beta/models/{model}:batchEmbedContents", request.model())
+                .bodyValue(new GeminiApi.BatchEmbedRequest(requests))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, resp -> resp.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(errBody -> new UpstreamException(name, resp.statusCode().value(), errBody)))
+                .bodyToMono(GeminiApi.BatchEmbedResponse.class)
+                .map(resp -> new EmbeddingResponse(
+                        resp.embeddings() == null ? List.of()
+                                : resp.embeddings().stream().map(GeminiApi.ContentEmbedding::values).toList(),
+                        null, name, request.model()))
+                .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
+    }
+
     @Override
     public Mono<HealthStatus> healthCheck() {
         long startNanos = System.nanoTime();
@@ -182,7 +207,8 @@ public class GeminiProvider implements LLMProvider {
                 .map(resp -> resp.models() == null ? List.<ModelInfo>of()
                         : resp.models().stream()
                         .filter(m -> m.supportedGenerationMethods() != null
-                                && m.supportedGenerationMethods().contains("generateContent"))
+                                && (m.supportedGenerationMethods().contains("generateContent")
+                                || m.supportedGenerationMethods().contains("embedContent")))
                         .map(m -> new ModelInfo(m.name().replaceFirst("^models/", ""), name))
                         .toList())
                 .onErrorMap(WebClientRequestException.class, e -> new ProviderUnreachableException(name, e));
