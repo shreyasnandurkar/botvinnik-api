@@ -1,6 +1,6 @@
 package com.shreyasnandurkar.botvinnikapi.streaming;
 
-import com.shreyasnandurkar.botvinnikapi.api.OpenAiSseEncoder;
+import com.shreyasnandurkar.botvinnikapi.api.openai.OpenAiSseEncoder;
 import com.shreyasnandurkar.botvinnikapi.core.error.StreamIdleTimeoutException;
 import com.shreyasnandurkar.botvinnikapi.core.error.UpstreamException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;

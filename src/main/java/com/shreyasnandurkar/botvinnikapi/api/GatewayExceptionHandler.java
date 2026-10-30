@@ -1,6 +1,5 @@
 package com.shreyasnandurkar.botvinnikapi.api;
 
-import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
 import com.shreyasnandurkar.botvinnikapi.core.error.GatewayException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,36 +7,46 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.ServerWebInputException;
 
 /**
- * Every client-visible failure becomes an OpenAI-style {"error": {...}}
+ * Every client-visible failure becomes an error body in the protocol of the request's path.
  */
 @RestControllerAdvice
 public class GatewayExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayExceptionHandler.class);
 
+    private final ClientProtocols protocols;
+
+    public GatewayExceptionHandler(ClientProtocols protocols) {
+        this.protocols = protocols;
+    }
+
     @ExceptionHandler(GatewayException.class)
-    public ResponseEntity<OpenAiDtos.ErrorBody> gateway(GatewayException e) {
+    public ResponseEntity<Object> gateway(GatewayException e, ServerWebExchange exchange) {
         return ResponseEntity.status(e.status())
-                .body(new OpenAiDtos.ErrorBody(
-                        new OpenAiDtos.ErrorDetail(e.getMessage(), e.type(), e.param(), e.code())));
+                .body(protocolOf(exchange).encodeError(e.getMessage(), e.type(), e.param(), e.code()));
     }
 
     /** Malformed JSON / undeserializable body. */
     @ExceptionHandler(ServerWebInputException.class)
-    public ResponseEntity<OpenAiDtos.ErrorBody> badInput(ServerWebInputException e) {
+    public ResponseEntity<Object> badInput(ServerWebInputException e, ServerWebExchange exchange) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(new OpenAiDtos.ErrorBody(new OpenAiDtos.ErrorDetail(
-                        "Could not parse the request body as JSON.", "invalid_request_error", null, null)));
+                .body(protocolOf(exchange).encodeError(
+                        "Could not parse the request body as JSON.", "invalid_request_error", null, null));
     }
 
     @ExceptionHandler(Throwable.class)
-    public ResponseEntity<OpenAiDtos.ErrorBody> unexpected(Throwable e) {
+    public ResponseEntity<Object> unexpected(Throwable e, ServerWebExchange exchange) {
         log.error("Unexpected error handling request", e);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(new OpenAiDtos.ErrorBody(new OpenAiDtos.ErrorDetail(
-                        "Internal gateway error.", "api_error", null, "internal_error")));
+                .body(protocolOf(exchange).encodeError(
+                        "Internal gateway error.", "api_error", null, "internal_error"));
+    }
+
+    private ClientProtocol<?> protocolOf(ServerWebExchange exchange) {
+        return protocols.forPath(exchange.getRequest().getPath().value());
     }
 }

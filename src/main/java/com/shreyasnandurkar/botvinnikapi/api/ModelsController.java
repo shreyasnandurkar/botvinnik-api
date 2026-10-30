@@ -1,6 +1,6 @@
 package com.shreyasnandurkar.botvinnikapi.api;
 
-import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
+import com.shreyasnandurkar.botvinnikapi.api.openai.OpenAiDtos;
 import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;

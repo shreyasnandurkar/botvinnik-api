@@ -27,4 +27,8 @@ ChatRequest(
     public boolean wantsReasoning() {
         return reasoningEffort != null && !reasoningEffort.equals("none");
     }
+
+    public ChatRequest withMaxTokens(Integer maxTokens) {
+        return new ChatRequest(model, messages, temperature, topP, maxTokens, stop, stream, reasoningEffort, tools);
+    }
 }

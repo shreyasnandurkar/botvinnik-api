@@ -1,6 +1,6 @@
 package com.shreyasnandurkar.botvinnikapi.security;
 
-import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
+import com.shreyasnandurkar.botvinnikapi.api.ClientProtocols;
 import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import com.shreyasnandurkar.botvinnikapi.config.GatewayProperties;
 import com.shreyasnandurkar.botvinnikapi.control.db.ApiKeyEntity;
@@ -42,16 +42,18 @@ public class ApiKeyAuthFilter implements WebFilter {
     private final SpendTracker spendTracker;
     private final ApiKeyRepository apiKeyRepository;
     private final ObjectMapper mapper;
+    private final ClientProtocols protocols;
     private final Map<UUID, Long> lastTouched = new ConcurrentHashMap<>();
 
     public ApiKeyAuthFilter(GatewayProperties properties, ConfigSnapshotService snapshots,
                             SpendTracker spendTracker, ApiKeyRepository apiKeyRepository,
-                            ObjectMapper mapper) {
+                            ObjectMapper mapper, ClientProtocols protocols) {
         this.properties = properties;
         this.snapshots = snapshots;
         this.spendTracker = spendTracker;
         this.apiKeyRepository = apiKeyRepository;
         this.mapper = mapper;
+        this.protocols = protocols;
     }
 
     @Override
@@ -101,8 +103,8 @@ public class ApiKeyAuthFilter implements WebFilter {
         if (retryAfterSeconds != null) {
             exchange.getResponse().getHeaders().set(HttpHeaders.RETRY_AFTER, retryAfterSeconds);
         }
-        byte[] body = mapper.writeValueAsBytes(new OpenAiDtos.ErrorBody(
-                new OpenAiDtos.ErrorDetail(message, type, null, code)));
+        byte[] body = mapper.writeValueAsBytes(protocols.forPath(exchange.getRequest().getPath().value())
+                .encodeError(message, type, null, code));
         DataBuffer buffer = exchange.getResponse().bufferFactory().wrap(body);
         return exchange.getResponse().writeWith(Mono.just(buffer));
     }

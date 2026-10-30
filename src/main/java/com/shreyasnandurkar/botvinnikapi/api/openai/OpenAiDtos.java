@@ -1,4 +1,4 @@
-package com.shreyasnandurkar.botvinnikapi.api.dto;
+package com.shreyasnandurkar.botvinnikapi.api.openai;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;

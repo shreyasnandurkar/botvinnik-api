@@ -1,6 +1,5 @@
-package com.shreyasnandurkar.botvinnikapi.api;
+package com.shreyasnandurkar.botvinnikapi.api.openai;
 
-import com.shreyasnandurkar.botvinnikapi.api.dto.OpenAiDtos;
 import com.shreyasnandurkar.botvinnikapi.core.error.GatewayException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.TokenUsage;
