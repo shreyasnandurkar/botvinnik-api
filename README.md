@@ -11,7 +11,7 @@
     
   </p>
 
-  [Overview](#overview) · [Features](#features) · [Getting started](#getting-started) · [Using it](#using-it) · [How routing works](#how-routing-works) · [API reference](#api-reference) · [Design notes](#design-notes)
+  [Overview](#overview) · [Architecture](#architecture) · [Features](#features) · [Getting started](#getting-started) · [Using it](#using-it) · [How routing works](#how-routing-works) · [API reference](#api-reference) · [Design notes](#design-notes)
 </div>
 
 ---
@@ -47,6 +47,70 @@ client.chat.completions.create(
 ```
 
 Any client protocol can reach any backend. A Claude Code session can be served by a local Qwen model; an Ollama client can be served by Gemini.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph CLIENTS["Apps (unmodified SDKs)"]
+        direction TB
+        C1["OpenAI SDK · LangChain · Cursor"]
+        C2["OpenAI Agents SDK"]
+        C3["Anthropic SDK · Claude Code"]
+        C4["ollama library · Open WebUI"]
+    end
+
+    subgraph GW["BotvinnikAPI · data plane (no DB calls)"]
+        direction LR
+        subgraph IN["Client protocols"]
+            direction TB
+            P1["OpenAI Chat<br/>/v1/chat/completions"]
+            P2["OpenAI Responses<br/>/v1/responses"]
+            P3["Anthropic Messages<br/>/v1/messages"]
+            P4["Ollama<br/>/api/chat · /api/generate"]
+        end
+        PIPE["Common request<br/>auth → limits → route →<br/>balance → circuit breaker"]
+        subgraph OUT["Provider adapters"]
+            direction TB
+            A1["ollama · NDJSON"]
+            A2["gemini · SSE"]
+            A3["anthropic · named SSE"]
+            A4["openai · SSE"]
+        end
+        P1 & P2 & P3 & P4 --> PIPE
+        PIPE --> A1 & A2 & A3 & A4
+    end
+
+    subgraph BACKENDS["Backends"]
+        direction TB
+        B1["Ollama on LAN GPUs"]
+        B2["Google Gemini"]
+        B3["Anthropic Claude"]
+        B4["OpenAI · Groq · vLLM · LM Studio"]
+    end
+
+    C1 --> P1
+    C2 --> P2
+    C3 --> P3
+    C4 --> P4
+    A1 --> B1
+    A2 --> B2
+    A3 --> B3
+    A4 --> B4
+
+    SNAP[("Config snapshot<br/>in memory, atomic swap")]
+    SINK["Log queue<br/>bounded, drop-oldest"]
+    CP["Control plane<br/>/v1/providers · aliases · pools · apikeys"]
+    PG[("PostgreSQL")]
+
+    SNAP -.->|read| PIPE
+    PIPE -.-> SINK
+    SINK -->|batched writes| PG
+    CP --> PG
+    PG -->|rebuild on admin write| SNAP
+```
+
+Each client protocol translates its request into one shared internal format and translates the reply back. Each provider adapter does the same toward its backend. Everything in the middle (routing, balancing, failover, limits) is written once and works for every protocol and backend pair. Adding a fifth client protocol or a fifth backend type means one new translator, not changes to the pipeline.
 
 ## Features
 
