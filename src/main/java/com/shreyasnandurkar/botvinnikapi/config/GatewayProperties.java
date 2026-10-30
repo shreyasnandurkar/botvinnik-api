@@ -19,7 +19,7 @@ public record GatewayProperties(List<ProviderProps> providers, SecurityProps sec
 
     /**
      * @param name              operator-chosen instance name, e.g. "office-gpu"
-     * @param type              adapter type, e.g. "ollama" | "gemini" | "openai"
+     * @param type              adapter type, e.g. "ollama" | "gemini" | "openai" | "anthropic"
      * @param baseUrl           provider endpoint; optional for cloud providers with a well-known default
      * @param apiKey            credential for cloud providers; unused for local ones
      * @param streamIdleTimeout max silence between stream chunks before the stream is

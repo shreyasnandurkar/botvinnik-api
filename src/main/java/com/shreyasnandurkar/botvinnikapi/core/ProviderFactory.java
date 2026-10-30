@@ -1,5 +1,6 @@
 package com.shreyasnandurkar.botvinnikapi.core;
 
+import com.shreyasnandurkar.botvinnikapi.providers.anthropic.AnthropicProvider;
 import com.shreyasnandurkar.botvinnikapi.providers.gemini.GeminiProvider;
 import com.shreyasnandurkar.botvinnikapi.providers.ollama.OllamaProvider;
 import com.shreyasnandurkar.botvinnikapi.providers.openai.OpenAiCompatProvider;
@@ -17,7 +18,7 @@ import java.util.Set;
 @Component
 public class ProviderFactory {
 
-    public static final Set<String> SUPPORTED_TYPES = Set.of("ollama", "gemini", "openai");
+    public static final Set<String> SUPPORTED_TYPES = Set.of("ollama", "gemini", "openai", "anthropic");
 
     private final WebClient.Builder webClientBuilder;
     private final ObjectMapper objectMapper;
@@ -45,6 +46,13 @@ public class ProviderFactory {
                             "Provider '" + name + "' (openai) requires a base-url or an api-key");
                 }
                 yield new OpenAiCompatProvider(name, baseUrl, apiKey, webClientBuilder, objectMapper,
+                        streamIdleTimeout);
+            }
+            case "anthropic" -> {
+                if (apiKey == null || apiKey.isBlank()) {
+                    throw new IllegalStateException("Provider '" + name + "' (anthropic) requires an api-key");
+                }
+                yield new AnthropicProvider(name, baseUrl, apiKey, webClientBuilder, objectMapper,
                         streamIdleTimeout);
             }
             default -> throw new IllegalStateException(
