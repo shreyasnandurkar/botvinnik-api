@@ -1,13 +1,13 @@
 package com.shreyasnandurkar.botvinnikapi.api;
 
-import com.shreyasnandurkar.botvinnikapi.api.openai.EmbeddingsRequest;
-import com.shreyasnandurkar.botvinnikapi.api.openai.OpenAiDtos;
 import com.shreyasnandurkar.botvinnikapi.config.ConfigSnapshotService;
 import com.shreyasnandurkar.botvinnikapi.config.GatewayProperties;
 import com.shreyasnandurkar.botvinnikapi.control.db.ApiKeyEntity;
 import com.shreyasnandurkar.botvinnikapi.core.ProviderRegistry;
 import com.shreyasnandurkar.botvinnikapi.core.error.InvalidRequestException;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingRequest;
+import com.shreyasnandurkar.botvinnikapi.core.model.EmbeddingResponse;
 import com.shreyasnandurkar.botvinnikapi.core.routing.ModelCatalog;
 import com.shreyasnandurkar.botvinnikapi.core.routing.RequestRouter;
 import com.shreyasnandurkar.botvinnikapi.security.ApiKeyAuthFilter;
@@ -48,7 +48,7 @@ public class ChatPipeline {
             Flux<?> frames = protocol.encodeStream(
                     router.stream(plan, forModel), body, plan.primary().model());
             return Mono.just(ResponseEntity.ok()
-                    .contentType(MediaType.TEXT_EVENT_STREAM)
+                    .contentType(protocol.streamMediaType())
                     .body(frames));
         }
 
@@ -58,15 +58,12 @@ public class ChatPipeline {
                         .body(protocol.encodeResponse(resp)));
     }
 
-    /** Embeddings have one wire shape (OpenAI's) and never stream, so they skip the protocol layer. */
-    public Mono<ResponseEntity<?>> embed(EmbeddingsRequest body) {
-        body.validate();
-        checkPromptSize(body.promptChars(), "input");
-        ProviderRegistry.RoutePlan plan = snapshots.registry().resolveRoute(body.model, catalog);
-        return router.embed(plan, body::toEmbeddingRequest)
-                .map(resp -> ResponseEntity.ok()
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(OpenAiDtos.EmbeddingList.from(resp, body.base64())));
+    /** Embeddings never stream, so callers validate and encode; this does limit → resolve → dispatch. */
+    public Mono<EmbeddingResponse> embed(String model, long promptChars,
+                                         Function<String, EmbeddingRequest> requestFor) {
+        checkPromptSize(promptChars, "input");
+        ProviderRegistry.RoutePlan plan = snapshots.registry().resolveRoute(model, catalog);
+        return router.embed(plan, requestFor);
     }
 
     /** §20 resource protection: reject oversized prompts, clamp max_tokens to the key's cap. */

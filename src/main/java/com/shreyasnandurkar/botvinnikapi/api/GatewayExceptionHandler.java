@@ -7,6 +7,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.ServerWebInputException;
 
@@ -37,6 +38,15 @@ public class GatewayExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(protocolOf(exchange).encodeError(400,
                         "Could not parse the request body as JSON.", "invalid_request_error", null, null));
+    }
+
+    /** Spring's own rejections (415, 405, 406...) keep their status rather than becoming a 500. */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Object> status(ResponseStatusException e, ServerWebExchange exchange) {
+        int status = e.getStatusCode().value();
+        String message = e.getReason() != null ? e.getReason() : HttpStatus.valueOf(status).getReasonPhrase();
+        return ResponseEntity.status(status)
+                .body(protocolOf(exchange).encodeError(status, message, "invalid_request_error", null, null));
     }
 
     @ExceptionHandler(Throwable.class)

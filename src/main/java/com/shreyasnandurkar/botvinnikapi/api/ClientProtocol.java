@@ -3,6 +3,7 @@ package com.shreyasnandurkar.botvinnikapi.api;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatChunk;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatRequest;
 import com.shreyasnandurkar.botvinnikapi.core.model.ChatResponse;
+import org.springframework.http.MediaType;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
@@ -25,6 +26,11 @@ public interface ClientProtocol<B> {
 
     /** SSE elements (payload strings or ServerSentEvents), including the protocol's in-band error and ending. */
     Flux<?> encodeStream(Flux<ChatChunk> chunks, B body, String model);
+
+    /** Content type of encodeStream's output; Ollama streams NDJSON rather than SSE. */
+    default MediaType streamMediaType() {
+        return MediaType.TEXT_EVENT_STREAM;
+    }
 
     Object encodeError(int status, String message, String type, String param, String code);
 
